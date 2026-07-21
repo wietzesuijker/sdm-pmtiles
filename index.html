@@ -217,6 +217,7 @@
   let entries = [];
   function selectLayer(entry) {
     window.__currentId = entry.id;
+    document.getElementById("species").value = entry.id;   // keep selector in sync
     document.getElementById("grp").innerHTML = `Group: <b>${entry.group}</b>`;
     document.getElementById("dl").href = "data/" + entry.cog;
     if (map.getLayer("sdm")) map.removeLayer("sdm");
