@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>SDM serving — PMTiles + COG from object storage</title>
-<meta name="description" content="Prototype: serve species-distribution rasters fast from object storage — raster PMTiles for display, COG for values & download, over HTTP Range, no tiling server.">
+<title>SDM serving: search a species, see it, download it</title>
+<meta name="description" content="Prototype: pick a species-distribution model, served fast from object storage: raster PMTiles for display, COG for values & download, over HTTP Range, no tiling server.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
@@ -22,15 +22,26 @@
     color: var(--ink); -webkit-font-smoothing: antialiased; }
   #map { position: absolute; inset: 0; background: #eef1ee; }
 
-  #card { position: absolute; top: 16px; left: 16px; z-index: 3; width: 312px;
+  #card { position: absolute; top: 16px; left: 16px; z-index: 3; width: 320px;
     max-width: calc(100vw - 32px); background: var(--panel); border-radius: 14px;
     box-shadow: var(--shadow); overflow: hidden; }
-  .hd { padding: 16px 18px 12px; }
+  .hd { padding: 16px 18px 4px; }
   .ey { font: 600 11px/1 Inter, sans-serif; letter-spacing: .09em;
     text-transform: uppercase; color: var(--acc); margin: 0 0 6px; }
   h1 { font: 700 19px/1.15 'Space Grotesk', sans-serif; margin: 0 0 6px; }
   .sub { margin: 0; font-size: 12.5px; line-height: 1.5; color: var(--mut); }
-  .bd { padding: 4px 18px 16px; }
+  .bd { padding: 12px 18px 16px; }
+
+  .pick { margin: 4px 0 2px; }
+  .pick label { display: block; font-size: 11px; font-weight: 600; letter-spacing: .04em;
+    text-transform: uppercase; color: var(--mut); margin-bottom: 5px; }
+  #species { width: 100%; padding: 9px 11px; font: 14px Inter, sans-serif; color: var(--ink);
+    background: #f7faf7; border: 1px solid var(--line); border-radius: 9px; appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M2 4l4 4 4-4' stroke='%235c6b62' stroke-width='1.6' fill='none'/%3E%3C/svg%3E");
+    background-repeat: no-repeat; background-position: right 11px center; cursor: pointer; }
+  #species:focus-visible { outline: 2px solid var(--acc); outline-offset: 2px; }
+  .grp { font-size: 11.5px; color: var(--mut); margin: 7px 0 0; }
+  .grp b { color: var(--ink); font-weight: 600; }
 
   .legend { margin: 14px 0 4px; }
   #ramp { height: 12px; border-radius: 6px; border: 1px solid var(--line);
@@ -71,13 +82,10 @@
   .val { font: 13px/1.4 Inter, sans-serif; min-width: 132px; }
   .val .big { font: 700 20px 'Space Grotesk', sans-serif; color: var(--acc); }
   .val .lbl { font-size: 12px; color: var(--ink); }
-  .val .bar { height: 6px; border-radius: 3px; margin: 7px 0 5px; background: var(--line);
-    overflow: hidden; }
-  .val .bar > i { display: block; height: 100%;
-    background: linear-gradient(90deg,#414487,#22a884,#fde725); }
+  .val .bar { height: 6px; border-radius: 3px; margin: 7px 0 5px; background: var(--line); overflow: hidden; }
+  .val .bar > i { display: block; height: 100%; background: linear-gradient(90deg,#414487,#22a884,#fde725); }
   .val .co { font-size: 11px; color: #8ea0b0; }
-  .maplibregl-popup-content { border-radius: 10px; padding: 11px 13px;
-    box-shadow: var(--shadow); }
+  .maplibregl-popup-content { border-radius: 10px; padding: 11px 13px; box-shadow: var(--shadow); }
 
   @media (max-width: 560px) {
     #card { top: 10px; left: 10px; right: 10px; width: auto; }
@@ -91,32 +99,35 @@
 <aside id="card" aria-label="Species distribution model viewer">
   <div class="hd">
     <p class="ey">openbiodiversity · serving prototype</p>
-    <h1>Species suitability</h1>
-    <p class="sub">One species-distribution raster, served straight from object
-       storage — <b>no tiling server</b>. Click anywhere to read the modelled value.</p>
+    <h1>Species distribution</h1>
+    <p class="sub">Pick a species, see its model, read or download the values,
+       served straight from object storage, <b>no tiling server</b>.</p>
   </div>
   <div class="bd">
+    <div class="pick">
+      <label for="species">Species</label>
+      <select id="species" aria-label="choose a species distribution model"></select>
+      <p class="grp" id="grp"></p>
+    </div>
     <div class="legend">
       <div id="ramp" role="img" aria-label="viridis colour scale, 0 to 1 suitability"></div>
       <div class="ticks"><span>0</span><span>0.5</span><span>1.0</span></div>
-      <div class="absence"><span class="chip" aria-hidden="true"></span> absence — transparent</div>
+      <div class="absence"><span class="chip" aria-hidden="true"></span> absence (transparent)</div>
     </div>
     <label class="ctl">opacity
-      <input id="op" type="range" min="0" max="1" step="0.05" value="0.9"
-             aria-label="layer opacity">
+      <input id="op" type="range" min="0" max="1" step="0.05" value="0.9" aria-label="layer opacity">
     </label>
-    <div class="hint"><b>Display</b> is raster PMTiles (colour only).
-       <b>Values</b> come from a Cloud-Optimized GeoTIFF read in the browser over
-       HTTP Range — the same file you can download.</div>
-    <a class="dl" id="dl" href="data/sdm.tif" download>↓ Download GeoTIFF (COG)</a>
+    <div class="hint">Click the map to read the modelled value at that point,
+       from the <b>COG</b>, in the browser, the same file you download.</div>
+    <a class="dl" id="dl" href="#" download>↓ Download GeoTIFF (COG)</a>
   </div>
   <div class="foot">
     Raster <b>PMTiles</b> + <b>COG</b> · HTTP Range · MapLibre GL.
-    Illustrative <b>synthetic</b> SDM (pipeline runs on real rasters unchanged).
+    Illustrative <b>synthetic</b> SDMs (pipeline runs on real rasters unchanged).
   </div>
 </aside>
 
-<div id="loader"><span class="spin" aria-hidden="true"></span> loading suitability layer…</div>
+<div id="loader"><span class="spin" aria-hidden="true"></span> loading…</div>
 
 <script src="https://unpkg.com/maplibre-gl@5.6.0/dist/maplibre-gl.js"
         integrity="sha384-GfxBM9x46BaAFxtCq39Fxir8fNZ4VDnwgfi6Kzi5/F1tAFsm0amuuV8kd+Pxzuf/"
@@ -128,10 +139,7 @@
         integrity="sha384-m5adk5PRgt3JjiYbYoG8oXxc3EgRFKc1aCBgKzyxqxnbYpdiAMlHkR0gVDp03Q/H"
         crossorigin="anonymous"></script>
 <script>
-  const PM_URL = "data/sdm.pmtiles";
-  const COG_URL = "data/sdm.tif";
   const COG_SCALE = 1 / 10000;          // matches build_sdm_pmtiles.py SCALE
-
   const protocol = new pmtiles.Protocol();
   maplibregl.addProtocol("pmtiles", protocol.tile);
 
@@ -140,46 +148,39 @@
     style: {
       version: 8,
       glyphs: "https://basemaps.cartocdn.com/fonts/{fontstack}/{range}.pbf",
-      sources: {
-        basemap: { type: "raster", tileSize: 256,
-          tiles: ["https://basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png"],
-          attribution: "© OpenStreetMap © CARTO" },
-        sdm: { type: "raster", url: "pmtiles://" + PM_URL, tileSize: 512 },
-      },
-      layers: [
-        { id: "basemap", type: "raster", source: "basemap" },
-        { id: "sdm", type: "raster", source: "sdm", paint: { "raster-opacity": 0.9 } },
-      ],
+      sources: { basemap: { type: "raster", tileSize: 256,
+        tiles: ["https://basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png"],
+        attribution: "© OpenStreetMap © CARTO" } },
+      layers: [{ id: "basemap", type: "raster", source: "basemap" }],
     },
-    center: [-74.5, 52.6], zoom: 3.7, minZoom: 2, maxZoom: 11,
+    center: [-90, 58], zoom: 3, minZoom: 2, maxZoom: 11,
     attributionControl: { compact: true },
   });
   map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "top-right");
   map.getCanvas().style.cursor = "crosshair";
 
   document.getElementById("op").addEventListener("input", (e) =>
-    map.setPaintProperty("sdm", "raster-opacity", +e.target.value));
+    map.getLayer("sdm") && map.setPaintProperty("sdm", "raster-opacity", +e.target.value));
 
   const hideLoader = () => document.getElementById("loader").classList.add("hide");
-  map.on("load", () => setTimeout(hideLoader, 500));  // guaranteed to fire
-  map.on("data", (e) => {
-    if (e.sourceId === "sdm" && e.isSourceLoaded) { hideLoader(); window.__sdmLoaded = true; }
-  });
-  map.on("idle", () => { hideLoader(); window.__mapIdle = true; });
+  map.on("load", () => setTimeout(hideLoader, 500));
+  map.on("data", (e) => { if (e.sourceId === "sdm" && e.isSourceLoaded) hideLoader(); });
+  map.on("idle", () => hideLoader());
   map.on("error", (e) => { (window.__mapErrors ||= []).push(String(e.error || e)); });
-  setTimeout(hideLoader, 6000);  // hard fallback: never trap the user behind a spinner
+  setTimeout(hideLoader, 6000);
 
-  // --- Click to inspect: real values from the COG, read client-side over Range ---
-  let cogImage = null, box = null, W = 0, H = 0, noData = null;
-  const cogReady = (async () => {
-    const tiff = await GeoTIFF.fromUrl(COG_URL);
-    cogImage = await tiff.getImage();
-    box = cogImage.getBoundingBox(); W = cogImage.getWidth(); H = cogImage.getHeight();
-    noData = cogImage.getGDALNoData();
-  })();
-
+  // --- COG value reader for the active layer (click-to-inspect) ---
+  let cogImage = null, box = null, W = 0, H = 0, noData = null, cogToken = 0;
+  async function loadCog(url) {
+    const my = ++cogToken;
+    const tiff = await GeoTIFF.fromUrl(url);
+    const img = await tiff.getImage();
+    if (my !== cogToken) return;                 // a newer switch won
+    cogImage = img; box = img.getBoundingBox();
+    W = img.getWidth(); H = img.getHeight(); noData = img.getGDALNoData();
+  }
   async function valueAt(lng, lat) {
-    await cogReady;
+    if (!cogImage) return { loading: true };
     if (lng < box[0] || lng > box[2] || lat < box[1] || lat > box[3]) return { outside: true };
     const px = Math.min(W - 1, Math.floor((lng - box[0]) / (box[2] - box[0]) * W));
     const py = Math.min(H - 1, Math.floor((box[3] - lat) / (box[3] - box[1]) * H));
@@ -197,7 +198,8 @@
       .setLngLat(e.lngLat).setHTML('<div class="val">reading…</div>').addTo(map);
     const r = await valueAt(lng, lat);
     let html;
-    if (r.outside) html = `<div class="val">outside the SDM extent<div class="co">${co}</div></div>`;
+    if (r.loading) html = `<div class="val">layer still loading…</div>`;
+    else if (r.outside) html = `<div class="val">outside this species' range<div class="co">${co}</div></div>`;
     else if (r.nodata) html = `<div class="val">no data (masked)<div class="co">${co}</div></div>`;
     else {
       const v = r.value, pct = Math.round(v * 100);
@@ -209,6 +211,36 @@
     }
     popup.setHTML(html);
     window.__lastValue = r;
+  });
+
+  // --- Catalogue: pick a species -> swap the served layer (the MVP flow) ---
+  let entries = [];
+  function selectLayer(entry) {
+    window.__currentId = entry.id;
+    document.getElementById("grp").innerHTML = `Group: <b>${entry.group}</b>`;
+    document.getElementById("dl").href = "data/" + entry.cog;
+    if (map.getLayer("sdm")) map.removeLayer("sdm");
+    if (map.getSource("sdm")) map.removeSource("sdm");
+    map.addSource("sdm", { type: "raster", url: "pmtiles://data/" + entry.pmtiles, tileSize: 512 });
+    map.addLayer({ id: "sdm", type: "raster", source: "sdm",
+      paint: { "raster-opacity": +document.getElementById("op").value } });
+    const [w, s, e, n] = entry.bounds;
+    map.fitBounds([[w, s], [e, n]], { padding: { top: 40, right: 40, bottom: 40, left: 360 }, duration: 700 });
+    loadCog("data/" + entry.cog);
+  }
+  window.__selectById = (id) => selectLayer(entries.find((x) => x.id === id));
+
+  fetch("data/manifest.json").then((r) => r.json()).then((m) => {
+    entries = m.layers;
+    const sel = document.getElementById("species");
+    entries.forEach((e) => {
+      const o = document.createElement("option");
+      o.value = e.id; o.textContent = e.label; sel.appendChild(o);
+    });
+    sel.addEventListener("change", () => selectLayer(entries.find((x) => x.id === sel.value)));
+    const start = () => selectLayer(entries[0]);
+    map.isStyleLoaded() ? start() : map.once("load", start);
+    window.__manifestLoaded = true;
   });
 </script>
 </body>

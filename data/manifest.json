@@ -1,0 +1,56 @@
+{
+  "layers": [
+    {
+      "id": "boreal_generalist",
+      "label": "Boreal generalist",
+      "group": "birds",
+      "bounds": [
+        -100,
+        44,
+        -55,
+        62
+      ],
+      "pmtiles": "species/boreal_generalist.pmtiles",
+      "cog": "species/boreal_generalist_cog.tif"
+    },
+    {
+      "id": "atlantic_coastal",
+      "label": "Atlantic coastal",
+      "group": "amphibians",
+      "bounds": [
+        -70,
+        43,
+        -52,
+        52
+      ],
+      "pmtiles": "species/atlantic_coastal.pmtiles",
+      "cog": "species/atlantic_coastal_cog.tif"
+    },
+    {
+      "id": "prairie_specialist",
+      "label": "Prairie specialist",
+      "group": "mammals",
+      "bounds": [
+        -114,
+        49,
+        -96,
+        57
+      ],
+      "pmtiles": "species/prairie_specialist.pmtiles",
+      "cog": "species/prairie_specialist_cog.tif"
+    },
+    {
+      "id": "great_lakes",
+      "label": "Great Lakes basin",
+      "group": "plants",
+      "bounds": [
+        -92,
+        41,
+        -74,
+        49
+      ],
+      "pmtiles": "species/great_lakes.pmtiles",
+      "cog": "species/great_lakes_cog.tif"
+    }
+  ]
+}
