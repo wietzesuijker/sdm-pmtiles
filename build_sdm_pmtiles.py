@@ -113,8 +113,11 @@ def _read_single_band(path: Path):
 def build_display_pmtiles(src: Path, rgba_tmp: Path, out: Path) -> dict:
     """Bake CMAP into RGBA (alpha=0 where suitability==0), then rio pmtiles."""
     data, valid, prof = _read_single_band(src)
-    vmax = float(data.max()) or 1.0
-    norm = np.clip(data / vmax, 0, 1)
+    vmax = float(data.max())
+    # SDMs are probabilities in [0,1]; rescale on a FIXED 0..1 so colours are
+    # absolute (comparable across species) and match the viewer's 0..1 legend.
+    # Per-layer max-stretch would make the legend lie for a raster whose max < 1.
+    norm = np.clip(data, 0, 1)
     rgb = _LUT[(norm * 255).round().astype(np.uint8)]
     visible = valid & (data > 0)
     alpha = np.where(visible, 255, 0).astype(np.uint8)
