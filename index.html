@@ -36,9 +36,8 @@
   .pick label { display: block; font-size: 11px; font-weight: 600; letter-spacing: .04em;
     text-transform: uppercase; color: var(--mut); margin-bottom: 5px; }
   #species { width: 100%; padding: 9px 11px; font: 14px Inter, sans-serif; color: var(--ink);
-    background: #f7faf7; border: 1px solid var(--line); border-radius: 9px; appearance: none;
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M2 4l4 4 4-4' stroke='%235c6b62' stroke-width='1.6' fill='none'/%3E%3C/svg%3E");
-    background-repeat: no-repeat; background-position: right 11px center; cursor: pointer; }
+    background: #f7faf7; border: 1px solid var(--line); border-radius: 9px; }
+  #species::placeholder { color: #9aa8a0; }
   #species:focus-visible { outline: 2px solid var(--acc); outline-offset: 2px; }
   .grp { font-size: 11.5px; color: var(--mut); margin: 7px 0 0; }
   .grp b { color: var(--ink); font-weight: 600; }
@@ -106,7 +105,9 @@
   <div class="bd">
     <div class="pick">
       <label for="species">Species</label>
-      <select id="species" aria-label="choose a species distribution model"></select>
+      <input id="species" list="species-list" autocomplete="off"
+             placeholder="Type to search…" aria-label="search species distribution models">
+      <datalist id="species-list"></datalist>
       <p class="grp" id="grp"></p>
     </div>
     <div class="legend">
@@ -217,7 +218,7 @@
   let entries = [];
   function selectLayer(entry) {
     window.__currentId = entry.id;
-    document.getElementById("species").value = entry.id;   // keep selector in sync
+    document.getElementById("species").value = entry.label; // keep search box in sync
     document.getElementById("grp").innerHTML = `Group: <b>${entry.group}</b>`;
     document.getElementById("dl").href = "data/" + entry.cog;
     if (map.getLayer("sdm")) map.removeLayer("sdm");
@@ -233,12 +234,14 @@
 
   fetch("data/manifest.json").then((r) => r.json()).then((m) => {
     entries = m.layers;
-    const sel = document.getElementById("species");
+    const inp = document.getElementById("species");
+    const dl = document.getElementById("species-list");
+    inp.placeholder = `Type to search ${entries.length} species…`;
     entries.forEach((e) => {
-      const o = document.createElement("option");
-      o.value = e.id; o.textContent = e.label; sel.appendChild(o);
+      const o = document.createElement("option"); o.value = e.label; dl.appendChild(o);
     });
-    sel.addEventListener("change", () => selectLayer(entries.find((x) => x.id === sel.value)));
+    const byLabel = (v) => entries.find((x) => x.label.toLowerCase() === v.trim().toLowerCase());
+    inp.addEventListener("change", () => { const e = byLabel(inp.value); if (e) selectLayer(e); });
     const start = () => selectLayer(entries[0]);
     map.isStyleLoaded() ? start() : map.once("load", start);
     window.__manifestLoaded = true;
