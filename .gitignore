@@ -1,0 +1,7 @@
+.venv
+node_modules/
+__pycache__/
+.claude-flow/
+*.pyc
+# working outputs; the served demo data lives in data/
+out/
