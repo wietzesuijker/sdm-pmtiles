@@ -1,0 +1,9 @@
+{
+  "what": "Per-file serving ceiling for the openbiodiversity SDM migration: a Canada-wide 300 m single-band raster (upper bound; per-species SDMs are range-clipped and smaller, but the national base layers are this size).",
+  "source": { "crs": "EPSG:3978", "res_m": 300, "width": 18334, "height": 17334,
+    "megapixels": 318, "zero_fraction": 0.91, "compressed_float32_mb": 100 },
+  "display_pmtiles": { "format": "WEBP", "zoom": "0..9", "size_mb": 29.2 },
+  "data_cog": { "dtype": "uint16", "scale": 0.0001, "overviews": 6, "size_mb": 61.9 },
+  "verified": "validate.py: tile 99.4% on viridis ramp; COG roundtrip max|delta| 5e-5; 6 overviews",
+  "corpus_implication": "One national layer serves in ~91 MB (29 display + 62 COG). ~10 national base layers ~= 0.9 GB; ~500 range-clipped species (x up to 3 variants) are each far smaller (measured 1-7 MB display, 2-3 MB COG). Whole served corpus is single-digit GB, not the ~1 TB raw source: serving compresses the source ~50-100x."
+}
