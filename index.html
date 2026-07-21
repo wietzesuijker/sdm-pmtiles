@@ -35,10 +35,21 @@
   .pick { margin: 4px 0 2px; }
   .pick label { display: block; font-size: 11px; font-weight: 600; letter-spacing: .04em;
     text-transform: uppercase; color: var(--mut); margin-bottom: 5px; }
-  #species { width: 100%; padding: 9px 11px; font: 14px Inter, sans-serif; color: var(--ink);
+  .combo { position: relative; }
+  #species { width: 100%; padding: 9px 34px 9px 11px; font: 14px Inter, sans-serif; color: var(--ink);
     background: #f7faf7; border: 1px solid var(--line); border-radius: 9px; }
   #species::placeholder { color: #9aa8a0; }
   #species:focus-visible { outline: 2px solid var(--acc); outline-offset: 2px; }
+  #species-toggle { position: absolute; top: 0; right: 0; height: 100%; width: 32px; border: 0;
+    background: none; color: var(--mut); font-size: 10px; cursor: pointer; }
+  #species-list { position: absolute; z-index: 10; top: calc(100% + 4px); left: 0; right: 0; margin: 0;
+    padding: 4px; list-style: none; background: #fff; border: 1px solid var(--line); border-radius: 10px;
+    box-shadow: var(--shadow); max-height: 224px; overflow-y: auto; }
+  #species-list[hidden] { display: none; }
+  #species-list li { padding: 8px 10px; border-radius: 7px; font-size: 13.5px; cursor: pointer; }
+  #species-list li.active, #species-list li[aria-selected="true"] { background: #eef4ee; }
+  #species-list li .g { color: var(--mut); font-size: 11.5px; }
+  #species-list li.empty { color: var(--mut); cursor: default; }
   .grp { font-size: 11.5px; color: var(--mut); margin: 7px 0 0; }
   .grp b { color: var(--ink); font-weight: 600; }
 
@@ -105,9 +116,13 @@
   <div class="bd">
     <div class="pick">
       <label for="species">Species</label>
-      <input id="species" list="species-list" autocomplete="off"
-             placeholder="Type to search…" aria-label="search species distribution models">
-      <datalist id="species-list"></datalist>
+      <div class="combo">
+        <input id="species" role="combobox" aria-expanded="false" aria-controls="species-list"
+               aria-autocomplete="list" autocomplete="off" placeholder="Search species…"
+               aria-label="search species distribution models">
+        <button id="species-toggle" type="button" tabindex="-1" aria-label="show all species">▼</button>
+        <ul id="species-list" role="listbox" hidden></ul>
+      </div>
       <p class="grp" id="grp"></p>
     </div>
     <div class="legend">
@@ -232,16 +247,65 @@
   }
   window.__selectById = (id) => selectLayer(entries.find((x) => x.id === id));
 
+  // Custom combobox: clicking the field (or caret) always opens the FULL list;
+  // typing filters; native <datalist> hides everything but the current value.
+  const $inp = () => document.getElementById("species");
+  const $list = () => document.getElementById("species-list");
+  let isOpen = false, active = -1;
+
+  function renderList(filter) {
+    const q = (filter || "").trim().toLowerCase();
+    const ul = $list(); ul.innerHTML = "";
+    const hits = entries.filter((e) => !q ||
+      e.label.toLowerCase().includes(q) || e.group.toLowerCase().includes(q));
+    if (!hits.length) {
+      const li = document.createElement("li"); li.className = "empty"; li.textContent = "No match";
+      ul.appendChild(li); active = -1; return;
+    }
+    hits.forEach((e) => {
+      const li = document.createElement("li"); li.setAttribute("role", "option");
+      li.dataset.id = e.id;
+      li.setAttribute("aria-selected", e.id === window.__currentId ? "true" : "false");
+      li.innerHTML = `${e.label} <span class="g">· ${e.group}</span>`;
+      li.addEventListener("mousedown", (ev) => { ev.preventDefault(); choose(e); });
+      ul.appendChild(li);
+    });
+    active = -1;
+  }
+  function openList(all) {
+    renderList(all ? "" : $inp().value);
+    $list().hidden = false; $inp().setAttribute("aria-expanded", "true"); isOpen = true;
+  }
+  function closeList() {
+    $list().hidden = true; $inp().setAttribute("aria-expanded", "false"); isOpen = false; active = -1;
+    const e = entries.find((x) => x.id === window.__currentId);
+    if (e) $inp().value = e.label;        // never leave a partial query behind
+  }
+  function choose(e) { selectLayer(e); closeList(); }
+  function paintActive(opts) {
+    opts.forEach((o, i) => o.classList.toggle("active", i === active));
+    if (active >= 0) opts[active].scrollIntoView({ block: "nearest" });
+  }
+
   fetch("data/manifest.json").then((r) => r.json()).then((m) => {
     entries = m.layers;
-    const inp = document.getElementById("species");
-    const dl = document.getElementById("species-list");
-    inp.placeholder = `Type to search ${entries.length} species…`;
-    entries.forEach((e) => {
-      const o = document.createElement("option"); o.value = e.label; dl.appendChild(o);
+    const inp = $inp();
+    inp.placeholder = `Search ${entries.length} species…`;
+    inp.addEventListener("focus", () => openList(true));
+    inp.addEventListener("click", () => openList(true));
+    inp.addEventListener("input", () => openList(false));
+    inp.addEventListener("keydown", (ev) => {
+      const opts = [...$list().querySelectorAll("li[data-id]")];
+      if (ev.key === "ArrowDown") { ev.preventDefault(); if (!isOpen) openList(true); active = Math.min(active + 1, opts.length - 1); paintActive(opts); }
+      else if (ev.key === "ArrowUp") { ev.preventDefault(); active = Math.max(active - 1, 0); paintActive(opts); }
+      else if (ev.key === "Enter" && isOpen && active >= 0) { ev.preventDefault(); choose(entries.find((x) => x.id === opts[active].dataset.id)); }
+      else if (ev.key === "Escape") { closeList(); inp.blur(); }
     });
-    const byLabel = (v) => entries.find((x) => x.label.toLowerCase() === v.trim().toLowerCase());
-    inp.addEventListener("change", () => { const e = byLabel(inp.value); if (e) selectLayer(e); });
+    document.getElementById("species-toggle").addEventListener("click", () => {
+      isOpen ? closeList() : openList(true); inp.focus();
+    });
+    document.addEventListener("click", (ev) => { if (!ev.target.closest(".combo")) closeList(); });
+
     const start = () => selectLayer(entries[0]);
     map.isStyleLoaded() ? start() : map.once("load", start);
     window.__manifestLoaded = true;

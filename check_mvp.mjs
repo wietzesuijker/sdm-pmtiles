@@ -30,8 +30,23 @@ page.on("response", (res) => { if (res.url().includes(".pmtiles") && res.status(
 
 await page.goto(url, { waitUntil: "domcontentloaded" });
 await page.waitForFunction(() => window.__manifestLoaded === true, { timeout: 15000 });
+await page.waitForFunction(() => window.__currentId, { timeout: 15000 });
 
-let allOk = true;
+// Combobox UX: clicking the field opens the FULL list; typing filters; clicking
+// an option selects it (the datalist trap the user hit was "only shows current").
+await page.click("#species");
+await page.waitForSelector("#species-list li[data-id]", { timeout: 5000 });
+const nAll = await page.$$eval("#species-list li[data-id]", (e) => e.length);
+await page.fill("#species", "prair");
+await page.dispatchEvent("#species", "input");
+await page.waitForTimeout(200);
+const nFilt = await page.$$eval("#species-list li[data-id]", (e) => e.length);
+await page.click('#species-list li[data-id="prairie_specialist"]');
+await page.waitForFunction(() => window.__currentId === "prairie_specialist", { timeout: 5000 });
+const comboOk = nAll >= 4 && nFilt === 1;
+console.log(`combobox: click shows ${nAll}, "prair" -> ${nFilt}, pick selects prairie ${comboOk ? "ok" : "FAIL"}`);
+
+let allOk = comboOk;
 for (const [id, tif, bounds, c, r] of CASES) {
   await page.evaluate((i) => window.__selectById(i), id);
   await page.waitForFunction((i) => window.__currentId === i, id, { timeout: 8000 });
