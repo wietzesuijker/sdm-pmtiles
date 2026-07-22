@@ -422,8 +422,12 @@
     if (map.getSource("sdm")) map.removeSource("sdm");
     // Value-in-red raster-dem: MapLibre decodes elevation = R (redFactor 1) and the
     // color-relief layer applies viridis on the GPU. No baked colours on the wire.
+    // green/blueFactor are 256 (not 0) on purpose: the tiles carry G=B=0 so they add
+    // nothing to the decoded value (R + 256*0 + 256*0 = R), but MapLibre packs the
+    // colour-ramp stops with step = min(redFactor, greenFactor, blueFactor); a 0 there
+    // divides by zero and collapses every stop, saturating the ramp to its top colour.
     map.addSource("sdm", { type: "raster-dem", url: "pmtiles://data/" + entry.pmtiles,
-      tileSize: 512, encoding: "custom", redFactor: 1, greenFactor: 0, blueFactor: 0, baseShift: 0 });
+      tileSize: 512, encoding: "custom", redFactor: 1, greenFactor: 256, blueFactor: 256, baseShift: 0 });
     map.addLayer({ id: "sdm", type: "color-relief", source: "sdm",
       paint: { "color-relief-color": rampExpr(+document.getElementById("th").value),
                "color-relief-opacity": +document.getElementById("op").value } });
