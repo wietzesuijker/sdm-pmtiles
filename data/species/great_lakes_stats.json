@@ -1,0 +1,13 @@
+{
+  "source": "out/great_lakes.tif",
+  "source_mb": 3.265071,
+  "display_pmtiles": {
+    "vmax": 1.0,
+    "visible_px": 929531,
+    "encoding": "r8-value",
+    "size_mb": 5.398188
+  },
+  "data_cog": {
+    "size_mb": 2.015766
+  }
+}

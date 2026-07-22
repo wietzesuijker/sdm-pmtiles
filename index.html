@@ -73,9 +73,10 @@
     background: repeating-conic-gradient(#dfe4df 0 25%, #fff 0 50%) 0/9px 9px; }
 
   .ctl { display: flex; align-items: center; gap: 10px; margin-top: 16px;
-    font-size: 12.5px; color: var(--mut); }
-  input[type=range] { flex: 1; accent-color: var(--acc-soft); height: 4px; }
+    font-size: 12.5px; color: var(--mut); white-space: nowrap; }
+  input[type=range] { flex: 1; accent-color: var(--acc-soft); height: 4px; min-width: 0; }
   input[type=range]:focus-visible { outline: 2px solid var(--acc); outline-offset: 3px; }
+  .thv { font-variant-numeric: tabular-nums; min-width: 30px; text-align: right; color: var(--ink); }
 
   .dl { display: inline-flex; align-items: center; gap: 7px; margin-top: 16px;
     padding: 9px 13px; border-radius: 9px; background: var(--acc); color: #fff;
@@ -121,6 +122,10 @@
   .sp-name { font: 700 20px/1.2 'Space Grotesk', sans-serif; margin: 0 0 3px; }
   .sp-group { display: inline-block; font-size: 11.5px; font-weight: 600; color: var(--acc);
     background: #eef4ee; border-radius: 999px; padding: 2px 10px; }
+  .gbif { display: inline-block; margin-left: 8px; font-size: 12px; font-weight: 600;
+    color: var(--acc); text-decoration: none; border-bottom: 1px solid var(--acc-soft); }
+  .gbif:hover { color: #3c6b4f; }
+  .gbif:focus-visible { outline: 2px solid var(--acc); outline-offset: 2px; }
   .readout { margin: 14px 0 4px; padding: 12px 14px; border-radius: 10px; background: #f7faf7;
     border: 1px solid var(--line); }
   .readout .rl { font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase;
@@ -183,6 +188,11 @@
         <label class="ctl">opacity
           <input id="op" type="range" min="0" max="1" step="0.05" value="0.9" aria-label="layer opacity">
         </label>
+        <label class="ctl">min suitability
+          <input id="th" type="range" min="0" max="1" step="0.05" value="0"
+                 aria-label="hide suitability below this value">
+          <span id="thv" class="thv">0.00</span>
+        </label>
         <a class="dl" id="dl" href="#" download>↓ Download GeoTIFF (COG)</a>
       </div>
     </aside>
@@ -201,31 +211,34 @@
       <h2>Species info</h2>
       <p class="sp-name" id="sp-name">—</p>
       <span class="sp-group" id="sp-group"></span>
+      <a class="gbif" id="gbif" href="#" target="_blank" rel="noopener noreferrer" hidden>View on GBIF ↗</a>
       <div class="readout">
         <p class="rl">Suitability at clicked point</p>
         <div id="readout"><div class="val">Click the map to read the modelled value.</div></div>
       </div>
-      <p class="sp-desc" id="sp-desc">Model provenance and a species profile will link here on
-         selection. For now this shows an <b>illustrative synthetic</b> model; the pipeline runs on
-         real rasters unchanged.</p>
+      <p class="sp-desc" id="sp-desc">The GBIF link above resolves to the taxon on selection; a real
+         SDM carries its own species key, so this points to the group's backbone page for now. This
+         is an <b>illustrative synthetic</b> model; the pipeline runs on real rasters unchanged.</p>
     </article>
 
     <article class="card model" id="modelinfo">
       <h2>About the model &amp; serving</h2>
-      <p><span class="tag">display</span><span class="tag">PMTiles</span>
-         <span class="tag">data</span><span class="tag">COG</span>
+      <p><span class="tag">display</span><span class="tag">value PMTiles</span>
+         <span class="tag">GPU colormap</span><span class="tag">data</span><span class="tag">COG</span>
          <span class="tag">HTTP Range</span><span class="tag">MapLibre GL</span></p>
       <p>One single-band float model becomes two files served from object storage with no tiling
-         server: a <b>viridis PMTiles</b> the map reads over byte-range requests, and a
-         <b>uint16 COG</b> (with overviews) you can download and click-read in the browser.</p>
-      <p><b>Why it stays fast:</b> the display tiles are pre-baked with overviews and range-served,
-         so the browser fetches a handful of small tiles and the GPU draws them, no server-side
-         re-tiling and nothing re-rendered per request.</p>
-      <p><b>Next lever</b> (Kyle Barron's COG-native argument): today the colour is baked into RGBA
-         tiles. Serving the single raw band and applying the viridis colormap on the GPU would cut
-         the transfer further and let the ramp change without re-tiling. Not yet taken.</p>
-      <p class="num" id="perf">This species: — display · — COG. National ceiling (Canada-wide 300 m,
-         318 MP, 91% zero): <b>29.2 MB</b> display + <b>61.9 MB</b> COG.</p>
+         server: a <b>value PMTiles</b> that carries the suitability in the tile itself (read as a
+         <code>raster-dem</code> source, coloured by viridis on the GPU), and a <b>uint16 COG</b>
+         (with overviews) you can download and click-read in the browser.</p>
+      <p><b>Why it stays fast:</b> tiles are pre-cut with overviews and range-served, so the browser
+         fetches a handful and the GPU draws and colours them, no server-side re-tiling, nothing
+         re-rendered per request. Because the colour lives in a GPU ramp (Kyle Barron's COG-native
+         argument), the <b>colormap and the suitability threshold recolour live</b>, no round-trip.</p>
+      <p><b>The tradeoff, honestly:</b> a value tile must be lossless (lossy compression would corrupt
+         the value it carries), so it runs <b>~3&times; a lossy colour-baked tile</b>. We pay transfer
+         to gain live recolour and data-true display; the exact 4-dp value still comes from the COG.</p>
+      <p class="num" id="perf">This species: — display · — COG. COG national ceiling (Canada-wide
+         300 m, 318 MP, 91% zero): <b>61.9 MB</b>.</p>
     </article>
   </div>
 
@@ -249,6 +262,38 @@
   const protocol = new pmtiles.Protocol();
   maplibregl.addProtocol("pmtiles", protocol.tile);
 
+  // Display tiles carry the value in the red byte (elevation = R, 0..255); MapLibre
+  // colours it on the GPU via color-relief. This viridis ramp is the ONLY colour
+  // definition, so the colormap / threshold recolour live without re-tiling.
+  const VIRIDIS = [[0,68,1,84],[0.0417,71,16,99],[0.0833,72,31,112],[0.125,71,45,123],
+    [0.1667,68,57,131],[0.2083,64,70,136],[0.25,59,82,139],[0.2917,54,93,141],
+    [0.3333,49,104,142],[0.375,44,114,142],[0.4167,40,124,142],[0.4583,36,134,142],
+    [0.5,33,145,140],[0.5417,31,154,138],[0.5833,32,164,134],[0.625,40,174,128],
+    [0.6667,53,183,121],[0.7083,72,193,110],[0.75,94,201,98],[0.7917,117,208,84],
+    [0.8333,144,215,67],[0.875,173,220,48],[0.9167,200,224,32],[0.9583,229,228,25],[1,253,231,37]];
+  const viridisAt = (t) => {
+    t = Math.min(1, Math.max(0, t));
+    const x = t * (VIRIDIS.length - 1), i = Math.floor(x), f = x - i;
+    const a = VIRIDIS[i], b = VIRIDIS[Math.min(i + 1, VIRIDIS.length - 1)];
+    const m = (j) => Math.round(a[j] + (b[j] - a[j]) * f);
+    return `rgb(${m(1)},${m(2)},${m(3)})`;
+  };
+  // color-relief-color expression on the decoded value byte. Everything at or below
+  // the threshold is transparent; above it, opaque viridis. Keys strictly ascending.
+  function rampExpr(thresh) {
+    const cut = Math.round(Math.min(1, Math.max(0, thresh)) * 255);
+    const out = ["interpolate", ["linear"], ["elevation"]];
+    let last = -1;
+    const push = (k, c) => { if (k > last) { out.push(k, c); last = k; } };
+    push(0, "rgba(68,1,84,0)");                 // absence -> transparent
+    if (cut > 0) push(cut, "rgba(68,1,84,0)");   // below threshold -> transparent
+    const start = Math.min(255, cut + 1);
+    push(start, viridisAt(start / 255));         // first visible band, opaque
+    VIRIDIS.forEach(([t, r, g, b]) => { const e = Math.round(t * 255); if (e > start) push(e, `rgb(${r},${g},${b})`); });
+    push(255, viridisAt(1));
+    return out;
+  }
+
   const map = new maplibregl.Map({
     container: "map",
     style: {
@@ -268,7 +313,14 @@
   map.getCanvas().style.cursor = "crosshair";
 
   document.getElementById("op").addEventListener("input", (e) =>
-    map.getLayer("sdm") && map.setPaintProperty("sdm", "raster-opacity", +e.target.value));
+    map.getLayer("sdm") && map.setPaintProperty("sdm", "color-relief-opacity", +e.target.value));
+
+  // Live threshold: recolour on the GPU (no re-tiling) to hide low suitability.
+  const th = document.getElementById("th");
+  th.addEventListener("input", (e) => {
+    document.getElementById("thv").textContent = (+e.target.value).toFixed(2);
+    if (map.getLayer("sdm")) map.setPaintProperty("sdm", "color-relief-color", rampExpr(+e.target.value));
+  });
 
   // Collapse the side panel so the map is functional on its own.
   const stage = document.getElementById("stage");
@@ -337,6 +389,24 @@
     window.__lastValue = r;
   });
 
+  // --- Species-info linking (Ryan's ask: species info links out on selection) ---
+  // GBIF backbone taxon keys per group; a manifest entry may override with `gbif`
+  // (a numeric taxonKey or a full URL) once real SDMs carry a resolved species.
+  const GBIF_GROUP = { birds: 212, amphibians: 131, mammals: 359, plants: 6 };
+  function setGbif(entry) {
+    const a = document.getElementById("gbif");
+    let href = null, label = "View on GBIF ↗";
+    if (entry.gbif != null) {
+      href = String(entry.gbif).startsWith("http") ? entry.gbif : "https://www.gbif.org/species/" + entry.gbif;
+      label = "View this taxon on GBIF ↗";
+    } else if (GBIF_GROUP[entry.group]) {
+      href = "https://www.gbif.org/species/" + GBIF_GROUP[entry.group];
+      label = `Browse ${entry.group} on GBIF ↗`;
+    }
+    a.hidden = !href;
+    if (href) { a.href = href; a.textContent = label; }
+  }
+
   // --- Catalogue: pick a species -> swap the served layer (the MVP flow) ---
   let entries = [];
   const fmtMb = (b) => (b / 1048576).toFixed(1);
@@ -345,13 +415,18 @@
     document.getElementById("species").value = entry.label; // keep search box in sync
     document.getElementById("sp-name").textContent = entry.label;
     document.getElementById("sp-group").textContent = entry.group;
+    setGbif(entry);
     document.getElementById("dl").href = "data/" + entry.cog;
     setReadout('<div class="val">Click the map to read the modelled value.</div>');
     if (map.getLayer("sdm")) map.removeLayer("sdm");
     if (map.getSource("sdm")) map.removeSource("sdm");
-    map.addSource("sdm", { type: "raster", url: "pmtiles://data/" + entry.pmtiles, tileSize: 512 });
-    map.addLayer({ id: "sdm", type: "raster", source: "sdm",
-      paint: { "raster-opacity": +document.getElementById("op").value } });
+    // Value-in-red raster-dem: MapLibre decodes elevation = R (redFactor 1) and the
+    // color-relief layer applies viridis on the GPU. No baked colours on the wire.
+    map.addSource("sdm", { type: "raster-dem", url: "pmtiles://data/" + entry.pmtiles,
+      tileSize: 512, encoding: "custom", redFactor: 1, greenFactor: 0, blueFactor: 0, baseShift: 0 });
+    map.addLayer({ id: "sdm", type: "color-relief", source: "sdm",
+      paint: { "color-relief-color": rampExpr(+document.getElementById("th").value),
+               "color-relief-opacity": +document.getElementById("op").value } });
     const [w, s, e, n] = entry.bounds;
     map.fitBounds([[w, s], [e, n]], { padding: 40, duration: 700 });
     loadCog("data/" + entry.cog);
@@ -372,8 +447,8 @@
     ]).then(([p, c]) => {
       const disp = p ? fmtMb(+p) + " MB" : "—";
       const cog = c ? fmtMb(+c) + " MB" : "—";
-      el.innerHTML = base + disp + "</b> display · <b>" + cog + "</b> COG. " +
-        "National ceiling (Canada-wide 300 m, 318 MP, 91% zero): <b>29.2 MB</b> display + <b>61.9 MB</b> COG.";
+      el.innerHTML = base + disp + "</b> display (value tiles) · <b>" + cog + "</b> COG. " +
+        "COG national ceiling (Canada-wide 300 m, 318 MP, 91% zero): <b>61.9 MB</b>.";
     }).catch(() => {});
   }
 

@@ -3,8 +3,9 @@
 
 Proves, without a running server:
   1. the .pmtiles archive is valid PMTiles v3, WebMercator, sane zoom range;
-  2. a mid-zoom tile decodes to a non-empty image whose colours are the CMAP
-     of the underlying suitability (display fidelity);
+  2. its tiles are LOSSLESS PNG that carry the suitability value in the red byte
+     (green/blue exactly 0, a real value gradient, values within source range) so
+     the GPU color-relief ramp decodes true values (display-encoding fidelity);
   3. the _cog.tif is a valid COG with overviews, and its uint16 scale metadata
      recovers the source float 0..1 values (data fidelity, download path).
 
@@ -17,19 +18,19 @@ import subprocess
 import sys
 from pathlib import Path
 
-import matplotlib
 import numpy as np
 import rasterio
 from PIL import Image
 from pmtiles.reader import MmapSource, Reader
 
-CMAP = "viridis"
 SCALE = 10000
-_LUT = (np.asarray([matplotlib.colormaps[CMAP](i / 255.0) for i in range(256)])[:, :3]
-        * 255).round().astype(np.int16)
+DISPLAY_LEVELS = 255  # value quantised to one byte in the red channel
 
 
-def check_pmtiles(path: Path) -> None:
+def check_pmtiles(path: Path, src: Path) -> None:
+    with rasterio.open(src) as s:
+        band = s.read(1).astype(np.float32)
+    src_rmax = round(min(1.0, float(np.nanmax(band))) * DISPLAY_LEVELS)
     with open(path, "rb") as f:
         reader = Reader(MmapSource(f))
         hdr = reader.header()
@@ -38,29 +39,31 @@ def check_pmtiles(path: Path) -> None:
         print(f"  pmtiles: v3 ok, tile_type={tt}, zoom {minz}..{maxz}, "
               f"tiles={hdr['addressed_tiles_count']}")
         assert minz <= maxz, "bad zoom range"
-        # Pull a tile near the middle zoom and decode it.
-        z = (minz + maxz) // 2
-        found = None
-        n = 2 ** z
-        for x in range(n):
-            for y in range(n):
+        # PNG (tile_type 2). Lossy tiles would corrupt the value encoding.
+        assert tt == 2 or "png" in str(tt).lower(), f"value tiles must be PNG, got {tt}"
+        # Aggregate over ALL tiles at a mid zoom, not the first non-empty one: for a
+        # range-clipped layer the first tile is often an all-absence edge tile.
+        z = min(maxz, max(minz, (minz + maxz) // 2))
+        levels, g_max, b_max, r_max, n_tiles = set(), 0, 0, 0, 0
+        for x in range(2 ** z):
+            for y in range(2 ** z):
                 data = reader.get(z, x, y)
-                if data:
-                    found = (z, x, y, data)
-                    break
-            if found:
-                break
-        assert found, f"no tile at zoom {z}"
-        z, x, y, data = found
-        img = np.asarray(Image.open(io.BytesIO(data)).convert("RGBA"))
-        opaque = img[img[..., 3] > 0][:, :3].astype(np.int16)
-        assert opaque.size, "decoded tile fully transparent"
-        # Every opaque pixel must lie near the CMAP ramp (nearest-LUT dist small).
-        d = np.abs(opaque[:, None, :] - _LUT[None, :, :]).sum(axis=2).min(axis=1)
-        frac_on_ramp = float((d <= 24).mean())  # WEBP-lossy tolerance
-        print(f"  tile z{z}/{x}/{y}: {img.shape[0]}x{img.shape[1]}, "
-              f"{opaque.shape[0]} opaque px, {frac_on_ramp:.1%} on {CMAP} ramp")
-        assert frac_on_ramp > 0.90, f"colours off {CMAP} ramp ({frac_on_ramp:.1%})"
+                if not data:
+                    continue
+                n_tiles += 1
+                img = np.asarray(Image.open(io.BytesIO(data)).convert("RGB")).astype(np.int16)
+                r, g, b = img[..., 0], img[..., 1], img[..., 2]
+                levels.update(np.unique(r).tolist())
+                g_max = max(g_max, int(g.max())); b_max = max(b_max, int(b.max()))
+                r_max = max(r_max, int(r.max()))
+        assert n_tiles, f"no tiles at zoom {z}"
+        print(f"  tiles z{z}: {n_tiles} decoded, Rmax={r_max} "
+              f"({r_max / DISPLAY_LEVELS:.3f} suitability), {len(levels)} value levels, "
+              f"G/B max={g_max}/{b_max}")
+        # Lossless invariant: the value lives only in red; a lossy codec bleeds it.
+        assert g_max == 0 and b_max == 0, "green/blue not 0 -> lossy tile corrupted encoding"
+        assert len(levels) >= 8, f"value gradient collapsed ({len(levels)} levels)"
+        assert r_max <= src_rmax + 2, f"tile value {r_max} exceeds source max {src_rmax}"
 
 
 def check_cog(cog: Path, src: Path) -> None:
@@ -92,9 +95,9 @@ def main() -> None:
     cog = stem.with_name(stem.name + "_cog.tif")
     src = stem.with_suffix(".tif")
     print(f"validating {stem.name}:")
-    check_pmtiles(pm)
+    check_pmtiles(pm, src)
     check_cog(cog, src)
-    print("PASS: display fidelity + data roundtrip verified")
+    print("PASS: value-encoding fidelity + data roundtrip verified")
 
 
 if __name__ == "__main__":

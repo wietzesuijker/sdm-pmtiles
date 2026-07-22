@@ -1,0 +1,13 @@
+{
+  "source": "out/boreal_generalist.tif",
+  "source_mb": 4.652833,
+  "display_pmtiles": {
+    "vmax": 1.0,
+    "visible_px": 1332568,
+    "encoding": "r8-value",
+    "size_mb": 16.118036
+  },
+  "data_cog": {
+    "size_mb": 2.854383
+  }
+}

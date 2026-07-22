@@ -1,0 +1,13 @@
+{
+  "source": "out/prairie_specialist.tif",
+  "source_mb": 2.84619,
+  "display_pmtiles": {
+    "vmax": 1.0,
+    "visible_px": 802549,
+    "encoding": "r8-value",
+    "size_mb": 5.071081
+  },
+  "data_cog": {
+    "size_mb": 1.761987
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "source": "out/atlantic_coastal.tif",
+  "source_mb": 3.129375,
+  "display_pmtiles": {
+    "vmax": 1.0,
+    "visible_px": 876389,
+    "encoding": "r8-value",
+    "size_mb": 5.513393
+  },
+  "data_cog": {
+    "size_mb": 1.939578
+  }
+}

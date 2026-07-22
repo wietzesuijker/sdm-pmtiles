@@ -9,11 +9,19 @@ the display candidate to validate "good enough"; single-band only for v1.
 This builds, from one single-band SDM raster, the two artifacts that answer the
 call's two needs and lets you measure them:
 
-  1. DISPLAY  -> <name>.pmtiles : colormap baked to RGBA WEBP image tiles,
-                reprojected to WebMercator. MapLibre reads it natively over HTTP
-                range requests via the pmtiles:// protocol -> no tiling server.
-                (rio pmtiles needs >=3 bands, so a raster tileset is always a
-                baked colormap: it shows suitability, it does not carry values.)
+  1. DISPLAY  -> <name>.pmtiles : the suitability VALUE quantised to one byte and
+                stored in the red channel of lossless PNG tiles, reprojected to
+                WebMercator. MapLibre reads it as a `raster-dem` source and colours
+                it on the GPU via a `color-relief` layer (viridis) over HTTP range
+                requests -> no tiling server, and the colour ramp / threshold can
+                change live without re-tiling. R = round(value*255), decoded by
+                MapLibre as elevation = R (custom raster-dem encoding, redFactor=1).
+                Eight bits is ample for a ~25-stop colour ramp; the exact 4-dp value
+                lives in the COG for click-read/download. One smooth byte-plane
+                compresses like the source; splitting the value across R+G (16-bit)
+                turns the low byte into noise and bloats PNG 4-7x, so we don't.
+                PNG (not WEBP): lossy compression would smear values across the
+                absence edge into speckle.
 
   2. DATA     -> <name>_cog.tif : float 0..1 scaled to uint16 (0..10000, 4 dp
                 lossless), Cloud-Optimized GeoTIFF with overviews + DEFLATE.
@@ -34,18 +42,14 @@ import subprocess
 import sys
 from pathlib import Path
 
-import matplotlib
 import numpy as np
 import rasterio
 from rasterio.enums import ColorInterp
 from rasterio.transform import from_bounds
 
-SCALE = 10000  # float 0..1 -> uint16 0..10000 (4 decimal places, lossless)
+SCALE = 10000  # float 0..1 -> uint16 0..10000 (4 decimal places, lossless COG)
 NODATA_U16 = 65535
-CMAP = "viridis"  # perceptually uniform; standard for continuous suitability
 ZOOM = "0..9"
-_LUT = (np.asarray([matplotlib.colormaps[CMAP](i / 255.0) for i in range(256)])[:, :3]
-        * 255).round().astype(np.uint8)
 
 
 def make_synthetic_sdm(dst: Path, width: int = 3000, height: int = 3000) -> None:
@@ -110,32 +114,36 @@ def _read_single_band(path: Path):
     return data, valid, prof
 
 
-def build_display_pmtiles(src: Path, rgba_tmp: Path, out: Path) -> dict:
-    """Bake CMAP into RGBA (alpha=0 where suitability==0), then rio pmtiles."""
+DISPLAY_LEVELS = 255  # value quantised to one byte for the GPU colour ramp
+
+
+def build_display_pmtiles(src: Path, rgb_tmp: Path, out: Path) -> dict:
+    """Quantise the suitability VALUE to one byte in the red channel so MapLibre can
+    colour it on the GPU as a raster-dem + color-relief layer. R = round(value*255);
+    MapLibre decodes elevation = R (custom encoding, redFactor=1). Value 0 (absence)
+    stays R=0 and the viewer's ramp maps 0 -> transparent. PNG (lossless): lossy
+    compression would smear the absence edge into speckle. Resample NEAREST so
+    downsampled overviews pick real encoded pixels, never blended bytes."""
     data, valid, prof = _read_single_band(src)
     vmax = float(data.max())
-    # SDMs are probabilities in [0,1]; rescale on a FIXED 0..1 so colours are
-    # absolute (comparable across species) and match the viewer's 0..1 legend.
-    # Per-layer max-stretch would make the legend lie for a raster whose max < 1.
-    norm = np.clip(data, 0, 1)
-    rgb = _LUT[(norm * 255).round().astype(np.uint8)]
+    # SDMs are probabilities in [0,1]; quantise on a FIXED 0..1 so the value a tile
+    # carries is absolute (comparable across species, matches the 0..1 legend).
+    r = (np.clip(data, 0, 1) * DISPLAY_LEVELS).round().astype(np.uint8)
+    r[~valid] = 0  # nodata -> absence -> transparent under the ramp
+    zeros = np.zeros_like(r)
     visible = valid & (data > 0)
-    alpha = np.where(visible, 255, 0).astype(np.uint8)
 
-    prof.update(count=4, dtype="uint8", nodata=None, compress="deflate",
+    prof.update(count=3, dtype="uint8", nodata=None, compress="deflate",
                 tiled=True, blockxsize=512, blockysize=512)
     prof.pop("photometric", None)
-    with rasterio.open(rgba_tmp, "w", **prof) as dst:
-        for i in range(3):
-            dst.write(rgb[..., i], i + 1)
-        dst.write(alpha, 4)
-        dst.colorinterp = [ColorInterp.red, ColorInterp.green,
-                           ColorInterp.blue, ColorInterp.alpha]
+    with rasterio.open(rgb_tmp, "w", **prof) as dst:
+        dst.write(r, 1); dst.write(zeros, 2); dst.write(zeros, 3)
+        dst.colorinterp = [ColorInterp.red, ColorInterp.green, ColorInterp.blue]
 
-    run_pmtiles([str(rgba_tmp), str(out), "--rgba", "--zoom-levels", ZOOM,
-                 "--format", "WEBP", "--resampling", "cubic"])
-    rgba_tmp.unlink(missing_ok=True)
-    return {"vmax": vmax, "visible_px": int(visible.sum()),
+    run_pmtiles([str(rgb_tmp), str(out), "--zoom-levels", ZOOM,
+                 "--format", "PNG", "--resampling", "nearest"])
+    rgb_tmp.unlink(missing_ok=True)
+    return {"vmax": vmax, "visible_px": int(visible.sum()), "encoding": "r8-value",
             "size_mb": out.stat().st_size / 1e6}
 
 
