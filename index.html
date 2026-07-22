@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>SDM serving: search a species, see it, download it</title>
-<meta name="description" content="Prototype: pick a species-distribution model, served fast from object storage: raster PMTiles for display, COG for values & download, over HTTP Range, no tiling server.">
+<meta name="description" content="Prototype: pick a species-distribution model, served fast from object storage: raster PMTiles for display, COG for values & download, over HTTP Range, no tiling server. The map is a self-contained component; search, species info, and model details sit outside it.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
@@ -13,26 +13,35 @@
       crossorigin="anonymous">
 <style>
   :root {
-    --ink: #17241d; --mut: #5c6b62; --line: #e7ebe6;
+    --ink: #17241d; --mut: #5c6b62; --line: #e7ebe6; --bg: #f4f7f4;
     --acc: rgb(70,120,90); --acc-soft: rgb(139,168,132);
     --panel: #ffffff; --shadow: 0 6px 28px rgba(20,40,30,.16);
+    --radius: 14px;
   }
   * { box-sizing: border-box; }
-  html, body { margin: 0; height: 100%; font-family: Inter, system-ui, sans-serif;
-    color: var(--ink); -webkit-font-smoothing: antialiased; }
-  #map { position: absolute; inset: 0; background: #eef1ee; }
+  html, body { margin: 0; min-height: 100%; font-family: Inter, system-ui, sans-serif;
+    color: var(--ink); background: var(--bg); -webkit-font-smoothing: antialiased; }
 
-  #card { position: absolute; top: 16px; left: 16px; z-index: 3; width: 320px;
-    max-width: calc(100vw - 32px); background: var(--panel); border-radius: 14px;
-    box-shadow: var(--shadow); overflow: hidden; }
-  .hd { padding: 16px 18px 4px; }
-  .ey { font: 600 11px/1 Inter, sans-serif; letter-spacing: .09em;
-    text-transform: uppercase; color: var(--acc); margin: 0 0 6px; }
-  h1 { font: 700 19px/1.15 'Space Grotesk', sans-serif; margin: 0 0 6px; }
-  .sub { margin: 0; font-size: 12.5px; line-height: 1.5; color: var(--mut); }
-  .bd { padding: 12px 18px 16px; }
+  /* ---- App shell: the map is one bounded component; everything else is outside it ---- */
+  .app { max-width: 1240px; margin: 0 auto; padding: 20px 20px 40px; }
 
-  .pick { margin: 4px 0 2px; }
+  .topbar { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; margin: 4px 2px 16px; }
+  .ey { font: 600 11px/1 Inter, sans-serif; letter-spacing: .09em; text-transform: uppercase;
+    color: var(--acc); margin: 0; }
+  h1 { font: 700 22px/1.15 'Space Grotesk', sans-serif; margin: 0; }
+  .topbar .sub { flex: 1 1 320px; margin: 0; font-size: 12.5px; line-height: 1.5; color: var(--mut); }
+
+  /* ---- Stage: side panel (search/controls) + the map component ---- */
+  .stage { display: grid; grid-template-columns: 320px 1fr; gap: 16px;
+    height: min(66vh, 640px); }
+  .stage.collapsed { grid-template-columns: 0 1fr; }
+
+  #panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+    box-shadow: var(--shadow); overflow: auto; transition: opacity .2s; }
+  .stage.collapsed #panel { opacity: 0; pointer-events: none; padding: 0; border: 0; }
+  .pbd { padding: 16px 18px 18px; }
+
+  .pick { margin: 2px 0; }
   .pick label { display: block; font-size: 11px; font-weight: 600; letter-spacing: .04em;
     text-transform: uppercase; color: var(--mut); margin-bottom: 5px; }
   .combo { position: relative; }
@@ -44,16 +53,16 @@
     background: none; color: var(--mut); font-size: 10px; cursor: pointer; }
   #species-list { position: absolute; z-index: 10; top: calc(100% + 4px); left: 0; right: 0; margin: 0;
     padding: 4px; list-style: none; background: #fff; border: 1px solid var(--line); border-radius: 10px;
-    box-shadow: var(--shadow); max-height: 224px; overflow-y: auto; }
+    box-shadow: var(--shadow); max-height: 260px; overflow-y: auto; }
   #species-list[hidden] { display: none; }
   #species-list li { padding: 8px 10px; border-radius: 7px; font-size: 13.5px; cursor: pointer; }
   #species-list li.active, #species-list li[aria-selected="true"] { background: #eef4ee; }
   #species-list li .g { color: var(--mut); font-size: 11.5px; }
   #species-list li.empty { color: var(--mut); cursor: default; }
-  .grp { font-size: 11.5px; color: var(--mut); margin: 7px 0 0; }
-  .grp b { color: var(--ink); font-weight: 600; }
 
-  .legend { margin: 14px 0 4px; }
+  .legend { margin: 16px 0 4px; }
+  .legend .lt { font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase;
+    color: var(--mut); margin: 0 0 7px; }
   #ramp { height: 12px; border-radius: 6px; border: 1px solid var(--line);
     background: linear-gradient(90deg,#440154,#414487,#2a788e,#22a884,#7ad151,#fde725); }
   .ticks { display: flex; justify-content: space-between; margin-top: 5px;
@@ -63,23 +72,28 @@
   .chip { width: 14px; height: 14px; border-radius: 4px; border: 1px solid var(--line);
     background: repeating-conic-gradient(#dfe4df 0 25%, #fff 0 50%) 0/9px 9px; }
 
-  .ctl { display: flex; align-items: center; gap: 10px; margin-top: 14px;
+  .ctl { display: flex; align-items: center; gap: 10px; margin-top: 16px;
     font-size: 12.5px; color: var(--mut); }
   input[type=range] { flex: 1; accent-color: var(--acc-soft); height: 4px; }
   input[type=range]:focus-visible { outline: 2px solid var(--acc); outline-offset: 3px; }
 
-  .hint { margin-top: 14px; padding: 10px 12px; border-radius: 9px;
-    background: #f2f6f2; font-size: 12px; line-height: 1.45; color: #3f5347; }
-  .hint b { color: var(--ink); }
-  .dl { display: inline-flex; align-items: center; gap: 7px; margin-top: 13px;
+  .dl { display: inline-flex; align-items: center; gap: 7px; margin-top: 16px;
     padding: 9px 13px; border-radius: 9px; background: var(--acc); color: #fff;
     text-decoration: none; font-size: 12.5px; font-weight: 600; }
   .dl:hover { background: #3c6b4f; }
   .dl:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
 
-  .foot { border-top: 1px solid var(--line); padding: 11px 18px;
-    font-size: 11px; line-height: 1.5; color: #8090a0; }
-  .foot b { color: var(--mut); font-weight: 600; }
+  /* ---- Map component ---- */
+  #mapwrap { position: relative; border-radius: var(--radius); overflow: hidden;
+    border: 1px solid var(--line); box-shadow: var(--shadow); }
+  #map { position: absolute; inset: 0; background: #eef1ee; }
+
+  #panelbtn { position: absolute; z-index: 3; top: 10px; left: 10px;
+    display: inline-flex; align-items: center; gap: 6px; padding: 7px 11px; border: 1px solid var(--line);
+    background: #fffffff2; color: var(--ink); border-radius: 9px; font: 600 12px Inter, sans-serif;
+    cursor: pointer; box-shadow: 0 2px 10px rgba(20,40,30,.12); }
+  #panelbtn:hover { background: #fff; }
+  #panelbtn:focus-visible { outline: 2px solid var(--acc); outline-offset: 2px; }
 
   #loader { position: absolute; inset: 0; z-index: 5; display: flex;
     align-items: center; justify-content: center; background: #eef1eecc;
@@ -97,53 +111,129 @@
   .val .co { font-size: 11px; color: #8ea0b0; }
   .maplibregl-popup-content { border-radius: 10px; padding: 11px 13px; box-shadow: var(--shadow); }
 
-  @media (max-width: 560px) {
-    #card { top: 10px; left: 10px; right: 10px; width: auto; }
-    .foot { display: none; }
+  /* ---- Sections outside the map: species info + model/serving details ---- */
+  .info { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 16px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+    box-shadow: var(--shadow); padding: 16px 18px 18px; }
+  .card h2 { font: 600 12px/1 Inter, sans-serif; letter-spacing: .06em; text-transform: uppercase;
+    color: var(--mut); margin: 0 0 12px; }
+
+  .sp-name { font: 700 20px/1.2 'Space Grotesk', sans-serif; margin: 0 0 3px; }
+  .sp-group { display: inline-block; font-size: 11.5px; font-weight: 600; color: var(--acc);
+    background: #eef4ee; border-radius: 999px; padding: 2px 10px; }
+  .readout { margin: 14px 0 4px; padding: 12px 14px; border-radius: 10px; background: #f7faf7;
+    border: 1px solid var(--line); }
+  .readout .rl { font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase;
+    color: var(--mut); margin: 0 0 6px; }
+  .sp-desc { margin: 14px 0 0; font-size: 12.5px; line-height: 1.55; color: var(--mut); }
+  .sp-desc b { color: var(--ink); }
+
+  .model p { margin: 0 0 10px; font-size: 12.5px; line-height: 1.55; color: #3f5347; }
+  .model p:last-child { margin-bottom: 0; }
+  .model b { color: var(--ink); }
+  .model .tag { display: inline-block; font-size: 11px; font-weight: 600; color: var(--acc);
+    background: #eef4ee; border-radius: 6px; padding: 2px 7px; margin: 0 2px 4px 0; }
+  .model .num { font-variant-numeric: tabular-nums; }
+
+  .foot { margin: 20px 2px 0; font-size: 11px; line-height: 1.6; color: #8090a0; }
+  .foot b { color: var(--mut); font-weight: 600; }
+
+  @media (max-width: 820px) {
+    .stage { grid-template-columns: 1fr; height: auto; }
+    .stage.collapsed { grid-template-columns: 1fr; }
+    #panel { max-height: 300px; }
+    .stage.collapsed #panel { display: none; }
+    #mapwrap { height: 56vh; }
+    .info { grid-template-columns: 1fr; }
   }
 </style>
 </head>
 <body>
-<div id="map"></div>
+<div class="app">
+  <header class="topbar">
+    <div>
+      <p class="ey">openbiodiversity · serving prototype</p>
+      <h1>Species distribution</h1>
+    </div>
+    <p class="sub">Pick a species, see its model, read or download the values, served straight
+       from object storage, <b>no tiling server</b>. The map stands on its own (go fullscreen
+       any time); search and details live beside it.</p>
+  </header>
 
-<aside id="card" aria-label="Species distribution model viewer">
-  <div class="hd">
-    <p class="ey">openbiodiversity · serving prototype</p>
-    <h1>Species distribution</h1>
-    <p class="sub">Pick a species, see its model, read or download the values,
-       served straight from object storage, <b>no tiling server</b>.</p>
-  </div>
-  <div class="bd">
-    <div class="pick">
-      <label for="species">Species</label>
-      <div class="combo">
-        <input id="species" role="combobox" aria-expanded="false" aria-controls="species-list"
-               aria-autocomplete="list" autocomplete="off" placeholder="Search species…"
-               aria-label="search species distribution models">
-        <button id="species-toggle" type="button" tabindex="-1" aria-label="show all species">▼</button>
-        <ul id="species-list" role="listbox" hidden></ul>
+  <div class="stage" id="stage">
+    <!-- Side panel: species search + display controls (kept out of the map) -->
+    <aside id="panel" aria-label="Species search and display controls">
+      <div class="pbd">
+        <div class="pick">
+          <label for="species">Species</label>
+          <div class="combo">
+            <input id="species" role="combobox" aria-expanded="false" aria-controls="species-list"
+                   aria-autocomplete="list" autocomplete="off" placeholder="Search species…"
+                   aria-label="search species distribution models">
+            <button id="species-toggle" type="button" tabindex="-1" aria-label="show all species">▼</button>
+            <ul id="species-list" role="listbox" hidden></ul>
+          </div>
+        </div>
+        <div class="legend">
+          <p class="lt">Suitability</p>
+          <div id="ramp" role="img" aria-label="viridis colour scale, 0 to 1 suitability"></div>
+          <div class="ticks"><span>0</span><span>0.5</span><span>1.0</span></div>
+          <div class="absence"><span class="chip" aria-hidden="true"></span> absence (transparent)</div>
+        </div>
+        <label class="ctl">opacity
+          <input id="op" type="range" min="0" max="1" step="0.05" value="0.9" aria-label="layer opacity">
+        </label>
+        <a class="dl" id="dl" href="#" download>↓ Download GeoTIFF (COG)</a>
       </div>
-      <p class="grp" id="grp"></p>
-    </div>
-    <div class="legend">
-      <div id="ramp" role="img" aria-label="viridis colour scale, 0 to 1 suitability"></div>
-      <div class="ticks"><span>0</span><span>0.5</span><span>1.0</span></div>
-      <div class="absence"><span class="chip" aria-hidden="true"></span> absence (transparent)</div>
-    </div>
-    <label class="ctl">opacity
-      <input id="op" type="range" min="0" max="1" step="0.05" value="0.9" aria-label="layer opacity">
-    </label>
-    <div class="hint">Click the map to read the modelled value at that point,
-       from the <b>COG</b>, in the browser, the same file you download.</div>
-    <a class="dl" id="dl" href="#" download>↓ Download GeoTIFF (COG)</a>
-  </div>
-  <div class="foot">
-    Raster <b>PMTiles</b> + <b>COG</b> · HTTP Range · MapLibre GL.
-    Illustrative <b>synthetic</b> SDMs (pipeline runs on real rasters unchanged).
-  </div>
-</aside>
+    </aside>
 
-<div id="loader"><span class="spin" aria-hidden="true"></span> loading…</div>
+    <!-- The map: a self-contained component (fullscreen control top-right) -->
+    <div id="mapwrap">
+      <div id="map"></div>
+      <button id="panelbtn" type="button" aria-pressed="false" aria-label="hide search panel">◀ panel</button>
+      <div id="loader"><span class="spin" aria-hidden="true"></span> loading…</div>
+    </div>
+  </div>
+
+  <!-- Sections OUTSIDE the map -->
+  <div class="info">
+    <article class="card" id="speciesinfo" aria-live="polite">
+      <h2>Species info</h2>
+      <p class="sp-name" id="sp-name">—</p>
+      <span class="sp-group" id="sp-group"></span>
+      <div class="readout">
+        <p class="rl">Suitability at clicked point</p>
+        <div id="readout"><div class="val">Click the map to read the modelled value.</div></div>
+      </div>
+      <p class="sp-desc" id="sp-desc">Model provenance and a species profile will link here on
+         selection. For now this shows an <b>illustrative synthetic</b> model; the pipeline runs on
+         real rasters unchanged.</p>
+    </article>
+
+    <article class="card model" id="modelinfo">
+      <h2>About the model &amp; serving</h2>
+      <p><span class="tag">display</span><span class="tag">PMTiles</span>
+         <span class="tag">data</span><span class="tag">COG</span>
+         <span class="tag">HTTP Range</span><span class="tag">MapLibre GL</span></p>
+      <p>One single-band float model becomes two files served from object storage with no tiling
+         server: a <b>viridis PMTiles</b> the map reads over byte-range requests, and a
+         <b>uint16 COG</b> (with overviews) you can download and click-read in the browser.</p>
+      <p><b>Why it stays fast:</b> the display tiles are pre-baked with overviews and range-served,
+         so the browser fetches a handful of small tiles and the GPU draws them, no server-side
+         re-tiling and nothing re-rendered per request.</p>
+      <p><b>Next lever</b> (Kyle Barron's COG-native argument): today the colour is baked into RGBA
+         tiles. Serving the single raw band and applying the viridis colormap on the GPU would cut
+         the transfer further and let the ramp change without re-tiling. Not yet taken.</p>
+      <p class="num" id="perf">This species: — display · — COG. National ceiling (Canada-wide 300 m,
+         318 MP, 91% zero): <b>29.2 MB</b> display + <b>61.9 MB</b> COG.</p>
+    </article>
+  </div>
+
+  <p class="foot">
+    Raster <b>PMTiles</b> + <b>COG</b> · HTTP Range · MapLibre GL ·
+    illustrative <b>synthetic</b> SDMs (pipeline runs on real rasters unchanged).
+  </p>
+</div>
 
 <script src="https://unpkg.com/maplibre-gl@5.6.0/dist/maplibre-gl.js"
         integrity="sha384-GfxBM9x46BaAFxtCq39Fxir8fNZ4VDnwgfi6Kzi5/F1tAFsm0amuuV8kd+Pxzuf/"
@@ -173,10 +263,23 @@
     attributionControl: { compact: true },
   });
   map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "top-right");
+  // The map is a self-contained component: it can fill the screen on its own.
+  map.addControl(new maplibregl.FullscreenControl({ container: document.getElementById("mapwrap") }), "top-right");
   map.getCanvas().style.cursor = "crosshair";
 
   document.getElementById("op").addEventListener("input", (e) =>
     map.getLayer("sdm") && map.setPaintProperty("sdm", "raster-opacity", +e.target.value));
+
+  // Collapse the side panel so the map is functional on its own.
+  const stage = document.getElementById("stage");
+  document.getElementById("panelbtn").addEventListener("click", (e) => {
+    const collapsed = stage.classList.toggle("collapsed");
+    e.currentTarget.setAttribute("aria-pressed", String(collapsed));
+    e.currentTarget.setAttribute("aria-label", collapsed ? "show search panel" : "hide search panel");
+    e.currentTarget.textContent = collapsed ? "▶ panel" : "◀ panel";
+    map.once("idle", () => map.resize());
+    map.resize();
+  });
 
   const hideLoader = () => document.getElementById("loader").classList.add("hide");
   map.on("load", () => setTimeout(hideLoader, 500));
@@ -207,45 +310,72 @@
   }
   window.valueAt = valueAt;
 
+  // Render a reading as HTML; used by both the on-map popup and the outside-map info panel.
+  function valueHtml(r, co) {
+    if (r.loading) return `<div class="val">layer still loading…</div>`;
+    if (r.outside) return `<div class="val">outside this species' range<div class="co">${co}</div></div>`;
+    if (r.nodata) return `<div class="val">no data (masked)<div class="co">${co}</div></div>`;
+    const v = r.value, pct = Math.round(v * 100);
+    const lbl = v === 0 ? "absence" : v < .33 ? "low" : v < .66 ? "moderate" : "high";
+    return `<div class="val"><span class="big">${v.toFixed(3)}</span>
+      <span class="lbl"> · ${lbl}</span>
+      <div class="bar"><i style="width:${pct}%"></i></div>
+      <div class="co">${co}</div></div>`;
+  }
+  const setReadout = (html) => { document.getElementById("readout").innerHTML = html; };
+
   map.on("click", async (e) => {
     const { lng, lat } = e.lngLat;
     const co = `${lat.toFixed(3)}, ${lng.toFixed(3)}`;
     const popup = new maplibregl.Popup({ closeButton: false, offset: 8 })
       .setLngLat(e.lngLat).setHTML('<div class="val">reading…</div>').addTo(map);
+    setReadout('<div class="val">reading…</div>');
     const r = await valueAt(lng, lat);
-    let html;
-    if (r.loading) html = `<div class="val">layer still loading…</div>`;
-    else if (r.outside) html = `<div class="val">outside this species' range<div class="co">${co}</div></div>`;
-    else if (r.nodata) html = `<div class="val">no data (masked)<div class="co">${co}</div></div>`;
-    else {
-      const v = r.value, pct = Math.round(v * 100);
-      const lbl = v === 0 ? "absence" : v < .33 ? "low" : v < .66 ? "moderate" : "high";
-      html = `<div class="val"><span class="big">${v.toFixed(3)}</span>
-        <span class="lbl"> · ${lbl}</span>
-        <div class="bar"><i style="width:${pct}%"></i></div>
-        <div class="co">${co}</div></div>`;
-    }
+    const html = valueHtml(r, co);
     popup.setHTML(html);
+    setReadout(html);                           // mirror into the species-info section (outside the map)
     window.__lastValue = r;
   });
 
   // --- Catalogue: pick a species -> swap the served layer (the MVP flow) ---
   let entries = [];
-  function selectLayer(entry) {
+  const fmtMb = (b) => (b / 1048576).toFixed(1);
+  function selectLayer(entry, opts) {
     window.__currentId = entry.id;
     document.getElementById("species").value = entry.label; // keep search box in sync
-    document.getElementById("grp").innerHTML = `Group: <b>${entry.group}</b>`;
+    document.getElementById("sp-name").textContent = entry.label;
+    document.getElementById("sp-group").textContent = entry.group;
     document.getElementById("dl").href = "data/" + entry.cog;
+    setReadout('<div class="val">Click the map to read the modelled value.</div>');
     if (map.getLayer("sdm")) map.removeLayer("sdm");
     if (map.getSource("sdm")) map.removeSource("sdm");
     map.addSource("sdm", { type: "raster", url: "pmtiles://data/" + entry.pmtiles, tileSize: 512 });
     map.addLayer({ id: "sdm", type: "raster", source: "sdm",
       paint: { "raster-opacity": +document.getElementById("op").value } });
     const [w, s, e, n] = entry.bounds;
-    map.fitBounds([[w, s], [e, n]], { padding: { top: 40, right: 40, bottom: 40, left: 360 }, duration: 700 });
+    map.fitBounds([[w, s], [e, n]], { padding: 40, duration: 700 });
     loadCog("data/" + entry.cog);
+    updatePerf(entry);
+    if (!opts || !opts.noUrl) {
+      history.replaceState(null, "", "?species=" + encodeURIComponent(entry.id));
+    }
   }
   window.__selectById = (id) => selectLayer(entries.find((x) => x.id === id));
+
+  // Measured per-file serving size for the active layer (honest, from the served bytes).
+  function updatePerf(entry) {
+    const el = document.getElementById("perf");
+    const base = "This species: <b>" ;
+    Promise.all([
+      fetch("data/" + entry.pmtiles, { method: "HEAD" }).then((r) => r.headers.get("content-length")),
+      fetch("data/" + entry.cog, { method: "HEAD" }).then((r) => r.headers.get("content-length")),
+    ]).then(([p, c]) => {
+      const disp = p ? fmtMb(+p) + " MB" : "—";
+      const cog = c ? fmtMb(+c) + " MB" : "—";
+      el.innerHTML = base + disp + "</b> display · <b>" + cog + "</b> COG. " +
+        "National ceiling (Canada-wide 300 m, 318 MP, 91% zero): <b>29.2 MB</b> display + <b>61.9 MB</b> COG.";
+    }).catch(() => {});
+  }
 
   // Custom combobox: clicking the field (or caret) always opens the FULL list;
   // typing filters; native <datalist> hides everything but the current value.
@@ -306,7 +436,10 @@
     });
     document.addEventListener("click", (ev) => { if (!ev.target.closest(".combo")) closeList(); });
 
-    const start = () => selectLayer(entries[0]);
+    // Deep link: ?species=<id> opens straight to that layer (shareable URLs).
+    const want = new URLSearchParams(location.search).get("species");
+    const first = (want && entries.find((x) => x.id === want)) || entries[0];
+    const start = () => selectLayer(first, { noUrl: !want });
     map.isStyleLoaded() ? start() : map.once("load", start);
     window.__manifestLoaded = true;
   });
