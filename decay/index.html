@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Evidence decay</title>
+<style>
+  :root { --bg: #fafaf7; --fg: #1d1d1b; --muted: #6b6b66; --line: #d8d8d2; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #161615; --fg: #ecece6; --muted: #9a9a93; --line: #34342f; } }
+  body { margin: 0; padding: 16px; background: var(--bg); color: var(--fg); font: 14px/1.45 system-ui, sans-serif; }
+  main { max-width: 1100px; margin: 0 auto; }
+  .bar { display: flex; flex-wrap: wrap; gap: 12px 24px; align-items: center; margin: 12px 0; }
+  input[type=range] { width: min(360px, 80vw); }
+  canvas { width: 100%; height: auto; border: 1px solid var(--line); image-rendering: pixelated; }
+  .muted { color: var(--muted); }
+  output { font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Evidence decay</h1>
+  <p class="muted">The clipped SDM is the ensemble times a curve of distance to the evidence mask. This page recomputes it in the browser. Stretch 1 rebuilds the published layer, 0 is a hard clip to the mask, above 1 is a looser decay.</p>
+  <div class="bar">
+    <label>Species <select id="sp"></select></label>
+    <label>Decay stretch <input id="scale" type="range" min="0" max="3" step="0.05" value="1"> <output id="sv">1.00</output></label>
+    <span>50% at <output id="d50"></output>, 10% at <output id="d10"></output></span>
+  </div>
+  <canvas id="map"></canvas>
+  <p id="readout" class="muted">Hover the map for values.</p>
+</main>
+<script src="https://cdn.jsdelivr.net/npm/geotiff@2.1.3/dist-browser/geotiff.js" integrity="sha384-m5adk5PRgt3JjiYbYoG8oXxc3EgRFKc1aCBgKzyxqxnbYpdiAMlHkR0gVDp03Q/H" crossorigin="anonymous"></script>
+<script>
+const $ = id => document.getElementById(id);
+const DOWN = 4; // read the 4x overview, ~1.9k px wide
+let curves, ens, dist, w, h, curve;
+
+// sequential ramp, light to dark green, 0..99
+const ramp = Array.from({ length: 100 }, (_, i) => {
+  const t = i / 99;
+  return [Math.round(240 - 200 * t), Math.round(245 - 120 * t), Math.round(220 - 160 * t)];
+});
+
+function kmBelow(c, level, s) {
+  const i = c.findIndex(v => v < level);
+  if (i < 0) return '> 5000 km';
+  return s === 0 ? 'the mask edge' : `${Math.round(i * s)} km`;
+}
+
+function draw() {
+  const s = +$('scale').value;
+  $('sv').value = s.toFixed(2);
+  $('d50').value = kmBelow(curve, 0.5, s);
+  $('d10').value = kmBelow(curve, 0.1, s);
+  const ctx = $('map').getContext('2d');
+  const img = ctx.createImageData(w, h);
+  const px = img.data, max = curve.length - 1;
+  for (let i = 0; i < ens.length; i++) {
+    const e = ens[i];
+    if (e === 255) continue;
+    const d = dist[i];
+    const g = d === 0 ? 1 : s === 0 ? 0 : curve[Math.min(Math.round(d / s), max)];
+    const v = Math.round(e * g);
+    if (v === 0) continue;
+    const [r, gg, b] = ramp[v], o = i * 4;
+    px[o] = r; px[o + 1] = gg; px[o + 2] = b; px[o + 3] = 255;
+  }
+  ctx.putImageData(img, 0, 0);
+}
+
+async function load(slug) {
+  const tiff = await GeoTIFF.fromUrl(`out/${slug}_decay.tif`);
+  const full = await tiff.getImage();
+  w = Math.floor(full.getWidth() / DOWN); h = Math.floor(full.getHeight() / DOWN);
+  [ens, dist] = await tiff.readRasters({ width: w, height: h, resampleMethod: 'nearest' });
+  curve = curves[slug].curve;
+  Object.assign($('map'), { width: w, height: h });
+  draw();
+}
+
+$('map').addEventListener('mousemove', ev => {
+  if (!ens) return;
+  const r = ev.target.getBoundingClientRect();
+  const x = Math.floor((ev.clientX - r.left) / r.width * w), y = Math.floor((ev.clientY - r.top) / r.height * h);
+  const i = y * w + x, e = ens[i];
+  if (e === undefined || e === 255) { $('readout').textContent = 'No data'; return; }
+  const s = +$('scale').value, d = dist[i];
+  const g = d === 0 ? 1 : s === 0 ? 0 : curve[Math.min(Math.round(d / s), curve.length - 1)];
+  $('readout').textContent = `ensemble ${e}, ${d} km from evidence, shown ${Math.round(e * g)}`;
+});
+
+(async () => {
+  curves = await (await fetch('out/curves.json')).json();
+  const slugs = Object.keys(curves).sort((a, b) => curves[b].d10_km - curves[a].d10_km);
+  $('sp').innerHTML = slugs.map(s => `<option value="${s}">${s} (10% at ${curves[s].d10_km} km)</option>`).join('');
+  $('sp').onchange = () => load($('sp').value);
+  $('scale').oninput = draw;
+  load(slugs[0]);
+})();
+</script>
+</body>
+</html>
