@@ -11,7 +11,7 @@ ensemble * g(km to the nearest mask cell), with one monotone curve g per
 species. This fits g as a 1 km lookup table, checks it rebuilds the clipped
 layer, and writes what a browser needs to recompute the clip with a different
 decay: the curve (curves.json) and a two-band raster (<slug>_decay.tif:
-ensemble, km to the mask).
+ensemble, km to the mask), plus the future ensembles (<slug>_ens_<period>.tif).
 
     decay/evidence_decay.py ursus-arctos gulo-gulo   # -> decay/out/
 """
@@ -29,6 +29,7 @@ BUCKET = ("/vsicurl/https://object-arbutus.alliancecan.ca/swift/v1/"
 NODATA = 255
 MAX_KM = 5000
 MIN_FIT = 5  # ratios from ensemble values below this are too quantised to fit
+FUTURE = ["2071-2100"]  # the bucket ships these unclipped; the page clips them with the same curve
 
 
 def distance_km(clip: np.ndarray) -> np.ndarray:
@@ -76,8 +77,8 @@ def km_below(curve: np.ndarray, level: float) -> int | None:
 def run(slug: str, out: Path) -> dict:
     import rasterio
 
-    def read(product: str):
-        src = rasterio.open(f"{BUCKET}/{slug}_{product}_1km_na_1980-2010_sett1.tif")
+    def read(product: str, period: str = "1980-2010"):
+        src = rasterio.open(f"{BUCKET}/{slug}_{product}_1km_na_{period}_sett1.tif")
         return src.read(1), src.profile
 
     ens, profile = read("sdm-ensemble")
@@ -92,6 +93,10 @@ def run(slug: str, out: Path) -> dict:
                    predictor=2, interleave="pixel", overview_resampling="nearest")
     with rasterio.open(out / f"{slug}_decay.tif", "w", **profile) as dst:
         dst.write(np.stack([ens.astype(np.uint16), dist]))
+    for period in FUTURE:
+        fut, _ = read("sdm-ensemble", period)
+        with rasterio.open(out / f"{slug}_ens_{period}.tif", "w", **{**profile, "count": 1}) as dst:
+            dst.write(fut.astype(np.uint16), 1)
     return {
         "d50_km": km_below(curve, 0.5),
         "d10_km": km_below(curve, 0.1),
