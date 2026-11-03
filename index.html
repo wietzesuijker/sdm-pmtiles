@@ -296,14 +296,8 @@
 
   const map = new maplibregl.Map({
     container: "map",
-    style: {
-      version: 8,
-      glyphs: "https://basemaps.cartocdn.com/fonts/{fontstack}/{range}.pbf",
-      sources: { basemap: { type: "raster", tileSize: 256,
-        tiles: ["https://basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png"],
-        attribution: "© OpenStreetMap © CARTO" } },
-      layers: [{ id: "basemap", type: "raster", source: "basemap" }],
-    },
+    // CARTO's vector style needs no key (its raster tiles now show "API key required")
+    style: "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json",
     center: [-90, 58], zoom: 3, minZoom: 2, maxZoom: 11,
     attributionControl: { compact: true },
   });
@@ -430,7 +424,8 @@
       tileSize: 512, encoding: "custom", redFactor: 1, greenFactor: 256, blueFactor: 256, baseShift: 0 });
     map.addLayer({ id: "sdm", type: "color-relief", source: "sdm",
       paint: { "color-relief-color": rampExpr(+document.getElementById("th").value),
-               "color-relief-opacity": +document.getElementById("op").value } });
+               "color-relief-opacity": +document.getElementById("op").value } },
+      map.getStyle().layers.find((l) => l.type === "symbol")?.id);  // under the place labels
     const [w, s, e, n] = entry.bounds;
     map.fitBounds([[w, s], [e, n]], { padding: 40, duration: 700 });
     loadCog("data/" + entry.cog);
