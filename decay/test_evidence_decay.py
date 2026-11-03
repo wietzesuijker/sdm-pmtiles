@@ -35,3 +35,20 @@ def test_km_below():
     assert km_below(curve, 0.5) == 2
     assert km_below(curve, 0.1) == 3
     assert km_below(curve, 0.01) is None
+
+
+def test_calibration_recovers_true_stretch():
+    from calibrate import STRETCHES, loglik
+
+    curve = 1 / (1 + np.arange(MAX_KM + 1) / 30)
+    ens, clip, dist, _ = synthetic(curve)
+    ens = np.where(ens == 255, 255, 50).astype(np.int16)
+    _, logs = loglik(ens, dist, curve, *np.indices(ens.shape).reshape(2, -1), 0.5)
+    p = np.exp(logs) / np.exp(logs).sum()
+    cells = np.random.default_rng(1).choice(ens.size, 3000, p=p)
+    rows, cols = np.unravel_index(cells, ens.shape)
+    ll = {}
+    for s in STRETCHES:
+        total, logs = loglik(ens, dist, curve, rows, cols, s)
+        ll[s] = logs.mean() - np.log(total)
+    assert max(ll, key=ll.get) == 0.5
