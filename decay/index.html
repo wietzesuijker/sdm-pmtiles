@@ -19,12 +19,14 @@
 <body>
 <main>
   <h1>Evidence decay</h1>
-  <p class="muted">The clipped SDM is the ensemble times a curve of distance to the evidence mask. This page recomputes it in the browser. Stretch 1 rebuilds the published layer, 0 is a hard clip to the mask, above 1 is a looser decay.</p>
+  <p class="muted">The clipped SDM is the ensemble times a curve of distance to the evidence mask. This page recomputes it in the browser. Stretch 1 rebuilds the published layer, 0 is a hard clip to the mask, above 1 is a looser decay. The bucket ships 2071-2100 unclipped; here it gets the same clip as 1980-2010.</p>
   <div class="bar">
     <label>Species <select id="sp"></select></label>
+    <label>Period <select id="period"><option>1980-2010</option><option>2071-2100</option></select></label>
     <label>Decay stretch <input id="scale" type="range" min="0" max="3" step="0.0125" value="1"> <output id="sv">1.00</output></label>
     <span>50% at <output id="d50"></output>, 10% at <output id="d10"></output></span>
   </div>
+  <p id="total"></p>
   <p id="calib" class="muted"></p>
   <canvas id="map"></canvas>
   <p id="readout" class="muted">Hover the map for values.</p>
@@ -33,7 +35,7 @@
 <script>
 const $ = id => document.getElementById(id);
 const DOWN = 4; // read the 4x overview, ~1.9k px wide
-let curves, calib = {}, ens, dist, w, h, curve;
+let curves, calib = {}, ens, now, future, dist, w, h, curve;
 
 // sequential ramp, light to dark green, 0..99
 const ramp = Array.from({ length: 100 }, (_, i) => {
@@ -47,20 +49,36 @@ function kmBelow(c, level, s) {
   return s === 0 ? 'the mask edge' : `${Math.round(i * s)} km`;
 }
 
+const weight = (d, s) => d === 0 ? 1 : s === 0 ? 0 : curve[Math.min(Math.round(d / s), curve.length - 1)];
+
+// total shown suitability of a period's ensemble at stretch s (s = Infinity: unclipped)
+function total(a, s) {
+  let t = 0;
+  for (let i = 0; i < a.length; i++) if (a[i] !== 255) t += s === Infinity ? a[i] : Math.round(a[i] * weight(dist[i], s));
+  return t;
+}
+
+function showTotal(s) {
+  if (!future) { $('total').textContent = 'No 2071-2100 layer for this species.'; return; }
+  const ratio = x => `${(x).toFixed(2)}\u00d7`;
+  $('total').textContent = `Total suitability 2071-2100 vs 1980-2010: ${ratio(total(future, s) / total(now, s))} with this clip on both, ` +
+    `${ratio(total(future, Infinity) / total(now, 1))} if 2071-2100 stays unclipped (as the bucket ships it).`;
+}
+
 function draw() {
   const s = +$('scale').value;
+  ens = $('period').value === '2071-2100' && future ? future : now;
   $('sv').value = s.toFixed(2);
   $('d50').value = kmBelow(curve, 0.5, s);
   $('d10').value = kmBelow(curve, 0.1, s);
+  showTotal(s);
   const ctx = $('map').getContext('2d');
   const img = ctx.createImageData(w, h);
-  const px = img.data, max = curve.length - 1;
+  const px = img.data;
   for (let i = 0; i < ens.length; i++) {
     const e = ens[i];
     if (e === 255) continue;
-    const d = dist[i];
-    const g = d === 0 ? 1 : s === 0 ? 0 : curve[Math.min(Math.round(d / s), max)];
-    const v = Math.round(e * g);
+    const v = Math.round(e * weight(dist[i], s));
     if (v === 0) continue;
     const [r, gg, b] = ramp[v], o = i * 4;
     px[o] = r; px[o + 1] = gg; px[o + 2] = b; px[o + 3] = 255;
@@ -72,7 +90,9 @@ async function load(slug) {
   const tiff = await GeoTIFF.fromUrl(`out/${slug}_decay.tif`);
   const full = await tiff.getImage();
   w = Math.floor(full.getWidth() / DOWN); h = Math.floor(full.getHeight() / DOWN);
-  [ens, dist] = await tiff.readRasters({ width: w, height: h, resampleMethod: 'nearest' });
+  [now, dist] = await tiff.readRasters({ width: w, height: h, resampleMethod: 'nearest' });
+  future = await GeoTIFF.fromUrl(`out/${slug}_ens_2071-2100.tif`)
+    .then(t => t.readRasters({ width: w, height: h, resampleMethod: 'nearest' })).then(r => r[0]).catch(() => null);
   curve = curves[slug].curve;
   showCalib(slug);
   Object.assign($('map'), { width: w, height: h });
@@ -100,9 +120,8 @@ $('map').addEventListener('mousemove', ev => {
   const x = Math.floor((ev.clientX - r.left) / r.width * w), y = Math.floor((ev.clientY - r.top) / r.height * h);
   const i = y * w + x, e = ens[i];
   if (e === undefined || e === 255) { $('readout').textContent = 'No data'; return; }
-  const s = +$('scale').value, d = dist[i];
-  const g = d === 0 ? 1 : s === 0 ? 0 : curve[Math.min(Math.round(d / s), curve.length - 1)];
-  $('readout').textContent = `ensemble ${e}, ${d} km from evidence, shown ${Math.round(e * g)}`;
+  const d = dist[i];
+  $('readout').textContent = `ensemble ${e}, ${d} km from evidence, shown ${Math.round(e * weight(d, +$('scale').value))}`;
 });
 
 (async () => {
@@ -112,6 +131,7 @@ $('map').addEventListener('mousemove', ev => {
   $('sp').innerHTML = slugs.map(s => `<option value="${s}">${s} (10% at ${curves[s].d10_km} km)</option>`).join('');
   $('sp').onchange = () => load($('sp').value);
   $('scale').oninput = draw;
+  $('period').onchange = draw;
   load(slugs[0]);
 })();
 </script>
