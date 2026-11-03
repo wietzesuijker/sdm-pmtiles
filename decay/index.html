@@ -8,10 +8,12 @@
   :root { --bg: #fafaf7; --fg: #1d1d1b; --muted: #6b6b66; --line: #d8d8d2; }
   @media (prefers-color-scheme: dark) { :root { --bg: #161615; --fg: #ecece6; --muted: #9a9a93; --line: #34342f; } }
   body { margin: 0; padding: 16px; background: var(--bg); color: var(--fg); font: 14px/1.45 system-ui, sans-serif; }
-  main { max-width: 1100px; margin: 0 auto; }
+  /* fill the viewport: controls take what they need, the map gets the rest, the readout stays visible */
+  main { max-width: 1100px; margin: 0 auto; height: calc(100dvh - 32px); display: grid; grid-template-rows: repeat(5, auto) minmax(240px, 1fr) auto; }
+  main > * { margin-top: 0; margin-bottom: 8px; }
   .bar { display: flex; flex-wrap: wrap; gap: 12px 24px; align-items: center; margin: 12px 0; }
   input[type=range] { width: min(360px, 80vw); }
-  canvas { width: 100%; height: auto; border: 1px solid var(--line); image-rendering: pixelated; }
+  canvas { justify-self: center; width: auto; height: auto; max-width: 100%; max-height: 100%; min-height: 0; border: 1px solid var(--line); image-rendering: pixelated; }
   .muted { color: var(--muted); }
   output { font-variant-numeric: tabular-nums; }
 </style>
