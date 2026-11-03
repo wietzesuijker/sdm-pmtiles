@@ -65,3 +65,12 @@ def test_uniform_effort_leaves_calibration_unchanged():
         total, logs = loglik(ens, dist, curve, rows, cols, s)
         total_e, logs_e = loglik(ens, dist, curve, rows, cols, s, effort)
         assert np.allclose(logs - np.log(total), logs_e - np.log(total_e))
+
+
+def test_histogram_totals_match_pixel_sums():
+    from publish import totals
+    curve = 1 / (1 + np.arange(MAX_KM + 1) / 30)
+    ens, clip, dist, _ = synthetic(curve)
+    scales = [0, 0.0125, 0.5, 1, 2.3]
+    want = [int(a[a != 255].astype(np.int64).sum()) for a in (apply_curve(ens, clip, dist, curve, s) for s in scales)]
+    assert totals(ens, dist, curve, scales) == want

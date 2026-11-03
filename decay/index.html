@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Evidence decay</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@10.11.0/ol.css" integrity="sha384-Jpg1uvTciFJuHq+90Ly0/2SKRT9yS5OhbIN5FuFoFWji9fc44ok8xxO88CJi8Z5W" crossorigin="anonymous">
 <style>
   :root { --bg: #fafaf7; --fg: #1d1d1b; --muted: #6b6b66; --line: #d8d8d2; }
   @media (prefers-color-scheme: dark) { :root { --bg: #161615; --fg: #ecece6; --muted: #9a9a93; --line: #34342f; } }
@@ -11,9 +12,9 @@
   /* fill the viewport: controls take what they need, the map gets the rest, the readout stays visible */
   main { max-width: 1100px; margin: 0 auto; height: calc(100dvh - 32px); display: grid; grid-template-rows: repeat(5, auto) minmax(240px, 1fr) auto; }
   main > * { margin-top: 0; margin-bottom: 8px; }
-  .bar { display: flex; flex-wrap: wrap; gap: 12px 24px; align-items: center; margin: 12px 0; }
+  .bar { display: flex; flex-wrap: wrap; gap: 12px 24px; align-items: center; }
   input[type=range] { width: min(360px, 80vw); }
-  canvas { justify-self: center; width: auto; height: auto; max-width: 100%; max-height: 100%; min-height: 0; border: 1px solid var(--line); image-rendering: pixelated; }
+  #map { min-height: 0; border: 1px solid var(--line); background: #e6edf2; }
   .muted { color: var(--muted); }
   output { font-variant-numeric: tabular-nums; }
 </style>
@@ -21,7 +22,7 @@
 <body>
 <main>
   <h1>Evidence decay</h1>
-  <p class="muted">The clipped SDM is the ensemble times a curve of distance to the evidence mask. This page recomputes it in the browser. Stretch 1 rebuilds the published layer, 0 is a hard clip to the mask, above 1 is a looser decay. The bucket ships 2071-2100 unclipped; here it gets the same clip as 1980-2010.</p>
+  <p class="muted">The clipped SDM is the ensemble times a curve of distance to the evidence mask. This page reads the 1 km ensemble from the bucket and applies the curve per pixel. Stretch 1 rebuilds the published layer, 0 is a hard clip to the mask, above 1 is a looser decay. The bucket ships 2071-2100 unclipped; here it gets the same clip as 1980-2010.</p>
   <div class="bar">
     <label>Species <select id="sp"></select></label>
     <label>Period <select id="period"><option>1980-2010</option><option>2071-2100</option></select></label>
@@ -30,20 +31,22 @@
   </div>
   <p id="total"></p>
   <p id="calib" class="muted"></p>
-  <canvas id="map"></canvas>
+  <div id="map"></div>
   <p id="readout" class="muted">Hover the map for values.</p>
 </main>
-<script src="https://cdn.jsdelivr.net/npm/geotiff@2.1.3/dist-browser/geotiff.js" integrity="sha384-m5adk5PRgt3JjiYbYoG8oXxc3EgRFKc1aCBgKzyxqxnbYpdiAMlHkR0gVDp03Q/H" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/proj4@2.12.1/dist/proj4.js" integrity="sha384-eCfO4pOi+VsP6z/nsQni5JF69AVBgkaI2kwPfFh+J64UMLNVDIBVvowHHM9Q62TF" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/geotiff@3.1.0-beta.0/dist-browser/geotiff.js" integrity="sha384-1zUQkdblaGG3/3NVm1wVn2orPiap8NtW7p5+jMNNkjoAEfmGp6yeYqSxFkTkKhqK" crossorigin="anonymous"></script><!-- ol.js expects the GeoTIFF global -->
+<script src="https://cdn.jsdelivr.net/npm/ol@10.11.0/dist/ol.js" integrity="sha384-rwbCGPbgxLkcQaFvIra1Vz3KBT1yBeF2/1VgLs/gCCNCJ61GHJGimHpkufVKcqap" crossorigin="anonymous"></script>
 <script>
 const $ = id => document.getElementById(id);
-let DOWN = 4; // read the 4x overview, ~1.9k px wide
-let base = 'out/', curves, calib = {}, ens, now, future, dist, w, h, curve;
+const BUCKET = 'https://object-arbutus.alliancecan.ca/swift/v1/4903c6264e0c4191a74a54c93b6fe1d9/def-pollock-eckert/vertebrates_NA/ECCC_2026';
+const DATA = 'data/'; // publish.py output: distance COGs, 1 km totals, curves, calibration
+let curves, calib = {}, totals, slug, curve;
 
-// sequential ramp, light to dark green, 0..99
-const ramp = Array.from({ length: 100 }, (_, i) => {
-  const t = i / 99;
-  return [Math.round(240 - 200 * t), Math.round(245 - 120 * t), Math.round(220 - 160 * t)];
-});
+// the bucket COGs: Lambert azimuthal equal-area on 45N 100W, 1 km cells
+proj4.defs('LAEA-NA', '+proj=laea +lat_0=45 +lon_0=-100 +x_0=0 +y_0=0 +datum=WGS84 +units=m +no_defs');
+ol.proj.proj4.register(proj4);
+ol.proj.get('LAEA-NA').setExtent([-4410000, -3340000, 3360000, 4310000]);
 
 function kmBelow(c, level, s) {
   const i = c.findIndex(v => v < level);
@@ -51,54 +54,80 @@ function kmBelow(c, level, s) {
   return s === 0 ? 'the mask edge' : `${Math.round(i * s)} km`;
 }
 
+// exact weight, as in evidence_decay.apply_curve; used for the readout
 const weight = (d, s) => d === 0 ? 1 : s === 0 ? 0 : curve[Math.min(Math.round(d / s), curve.length - 1)];
 
-// total shown suitability of a period's ensemble at stretch s (s = Infinity: unclipped)
-function total(a, s) {
-  let t = 0;
-  for (let i = 0; i < a.length; i++) if (a[i] !== 255) t += s === Infinity ? a[i] : Math.round(a[i] * weight(dist[i], s));
-  return t;
+// GPU version: the curve as linear stops on round(km / stretch), with a knot wherever it has dropped 0.01
+// since the last one (both sides of a jump), so shown values are within 1 of the exact lookup
+function knots(c, step = 0.01) {
+  const k = [0];
+  for (let i = 1; i < c.length; i++) {
+    if (Math.abs(c[i] - c[k.at(-1)]) < step) continue;
+    if (k.at(-1) !== i - 1) k.push(i - 1);
+    k.push(i);
+  }
+  if (k.at(-1) !== c.length - 1) k.push(c.length - 1);
+  return k;
+}
+function style(c) {
+  const stops = knots(c).flatMap(k => [k, c[k]]);
+  const d = ['band', 2], s = ['var', 's'];
+  const g = ['case', ['==', d, 0], 1, ['==', s, 0], 0, ['interpolate', ['linear'], ['floor', ['+', ['/', d, s], 0.5]], ...stops]];
+  const v = ['floor', ['+', ['*', ['band', 1], g], 0.5]];
+  return {
+    variables: { s: +$('scale').value },
+    color: ['case', ['any', ['==', ['band', 3], 0], ['<', v, 1]], [0, 0, 0, 0],
+      ['interpolate', ['linear'], v, 0, [240, 245, 220, 0.9], 99, [40, 125, 60, 0.9]]],
+  };
 }
 
-function showTotal(s) {
-  if (!future) { $('total').textContent = 'No 2071-2100 layer for this species.'; return; }
-  const ratio = x => `${(x).toFixed(2)}\u00d7`;
-  $('total').textContent = `Total suitability 2071-2100 vs 1980-2010: ${ratio(total(future, s) / total(now, s))} with this clip on both, ` +
-    `${ratio(total(future, Infinity) / total(now, 1))} if 2071-2100 stays unclipped (as the bucket ships it).`;
+const view = new ol.View({ projection: 'LAEA-NA', center: [0, 0], zoom: 2 });
+const data = new ol.layer.WebGLTile({ style: { color: [0, 0, 0, 0] } });
+// Natural Earth countries as vectors, so they draw in the map projection without warped raster tiles
+const land = new ol.source.Vector({ attributions: 'Natural Earth' });
+const map = new ol.Map({ target: 'map', view, layers: [
+  new ol.layer.Vector({ source: land, style: new ol.style.Style({ fill: new ol.style.Fill({ color: '#f4f3ee' }) }) }),
+  data,
+  new ol.layer.Vector({ source: land, style: new ol.style.Style({ stroke: new ol.style.Stroke({ color: '#8a8a82', width: 0.7 }) }) }),
+] });
+fetch('https://cdn.jsdelivr.net/npm/world-atlas@2.0.2/countries-50m.json').then(r => r.json()).then(topo => {
+  // the Americas only: LAEA on 100W stretches land near its antipode (Indian Ocean) into rings around the map,
+  // and Russia (643) and France (250, with Reunion) reach it
+  const fs = new ol.format.TopoJSON({ layers: ['countries'] }).readFeatures(topo)
+    .filter(f => !['643', '250'].includes(f.getId()) && ol.extent.intersects(f.getGeometry().getExtent(), [-170, 5, -10, 85]));
+  fs.forEach(f => f.getGeometry().transform('EPSG:4326', 'LAEA-NA'));
+  land.addFeatures(fs);
+}).catch(() => {});
+
+function setSource() {
+  const period = $('period').value;
+  data.setSource(new ol.source.GeoTIFF({
+    sources: [{ url: `${BUCKET}/${slug}_sdm-ensemble_1km_na_${period}_sett1.tif`, nodata: 255 }, { url: `${DATA}${slug}_dist.tif` }],
+    normalize: false, interpolate: false, projection: 'LAEA-NA',
+    sourceOptions: { cacheSize: 4096 }, // geotiff's default 100-block cache evicts blocks mid-read under OL's parallel tile loads
+  }));
 }
 
-function draw() {
+function update() {
   const s = +$('scale').value;
-  ens = $('period').value === '2071-2100' && future ? future : now;
+  data.updateStyleVariables({ s });
   $('sv').value = s.toFixed(2);
   $('d50').value = kmBelow(curve, 0.5, s);
   $('d10').value = kmBelow(curve, 0.1, s);
-  showTotal(s);
-  const ctx = $('map').getContext('2d');
-  const img = ctx.createImageData(w, h);
-  const px = img.data;
-  for (let i = 0; i < ens.length; i++) {
-    const e = ens[i];
-    if (e === 255) continue;
-    const v = Math.round(e * weight(dist[i], s));
-    if (v === 0) continue;
-    const [r, gg, b] = ramp[v], o = i * 4;
-    px[o] = r; px[o + 1] = gg; px[o + 2] = b; px[o + 3] = 255;
-  }
-  ctx.putImageData(img, 0, 0);
+  const t = totals[slug], i = Math.round(s / 0.0125);
+  if (!t['2071-2100']) { $('total').textContent = 'No 2071-2100 layer for this species.'; return; }
+  const ratio = x => `${x.toFixed(2)}×`;
+  $('total').textContent = `Total suitability at 1 km, 2071-2100 vs 1980-2010: ${ratio(t['2071-2100'][i] / t['1980-2010'][i])} with this clip on both, ` +
+    `${ratio(t['2071-2100 raw'] / t['1980-2010'][totals.scales.indexOf(1)])} if 2071-2100 stays unclipped (as the bucket ships it).`;
 }
 
-async function load(slug) {
-  const tiff = await GeoTIFF.fromUrl(`${base}${slug}_decay.tif`);
-  const full = await tiff.getImage();
-  w = Math.floor(full.getWidth() / DOWN); h = Math.floor(full.getHeight() / DOWN);
-  [now, dist] = await tiff.readRasters({ width: w, height: h, resampleMethod: 'nearest' });
-  future = await GeoTIFF.fromUrl(`${base}${slug}_ens_2071-2100.tif`)
-    .then(t => t.readRasters({ width: w, height: h, resampleMethod: 'nearest' })).then(r => r[0]).catch(() => null);
-  curve = curves[slug].curve;
+function load(next) {
+  slug = next; curve = curves[slug].curve;
+  data.setStyle(style(curve));
+  setSource();
   showCalib(slug);
-  Object.assign($('map'), { width: w, height: h });
-  draw();
+  view.fit(totals[slug].extent, { padding: [24, 24, 24, 24] });
+  update();
 }
 
 // best stretch for GBIF records from 2025 and 2026, from calibrate.py; inf = raw ensemble
@@ -113,31 +142,31 @@ function showCalib(slug) {
   const parts = [fit('raw', c.raw)];
   if (c.target_group) parts.push(fit('bias-corrected', c.target_group));
   $('calib').innerHTML = `${c.n_new} new GBIF records (2025 to 2026, ${c.outside_mask} outside the mask) fit best at: ${parts.join(', ')}.`;
-  $('calib').querySelectorAll('button').forEach(b => b.onclick = () => { $('scale').value = b.dataset.s; draw(); });
+  $('calib').querySelectorAll('button').forEach(b => b.onclick = () => { $('scale').value = b.dataset.s; update(); });
 }
 
-$('map').addEventListener('mousemove', ev => {
-  if (!ens) return;
-  const r = ev.target.getBoundingClientRect();
-  const x = Math.floor((ev.clientX - r.left) / r.width * w), y = Math.floor((ev.clientY - r.top) / r.height * h);
-  const i = y * w + x, e = ens[i];
-  if (e === undefined || e === 255) { $('readout').textContent = 'No data'; return; }
-  const d = dist[i];
-  $('readout').textContent = `ensemble ${e}, ${d} km from evidence, shown ${Math.round(e * weight(d, +$('scale').value))}`;
+map.on('pointermove', ev => {
+  const px = data.getData(ev.pixel);
+  if (!px || px[2] === 0) { $('readout').textContent = 'No data'; return; }
+  const [e, d] = px, km = view.getResolution() / 1000;
+  $('readout').textContent = `ensemble ${e}, ${d} km from evidence, shown ${Math.round(e * weight(d, +$('scale').value))}` +
+    (km > 1.5 ? ` (cells ~${Math.round(km)} km at this zoom, zoom in for 1 km)` : ' (1 km cell)');
 });
 
 (async () => {
-  // local evidence_decay.py output if present, else the committed demo/ copy (already 4x downsampled)
-  let r = await fetch('out/curves.json').catch(() => null);
-  if (!r?.ok) { base = 'demo/'; DOWN = 1; r = await fetch('demo/curves.json').catch(() => null); }
-  if (!r?.ok) { $('readout').textContent = 'No data loaded. Open https://wietzesuijker.github.io/sdm-pmtiles/decay/ or run python3 serve.py at the repo root (file:// cannot load the data).'; return; }
-  curves = await r.json();
-  calib = await fetch(`${base}calibration.json`).then(r => r.ok ? r.json() : {}).catch(() => ({}));
+  const get = name => fetch(DATA + name).then(r => r.ok ? r.json() : Promise.reject(new Error(`${name}: ${r.status}`)));
+  try {
+    [curves, totals] = await Promise.all([get('curves.json'), get('totals.json')]);
+  } catch (e) {
+    $('readout').textContent = `No data loaded (${e.message}). Open https://wietzesuijker.github.io/sdm-pmtiles/decay/ or run python3 serve.py at the repo root (file:// cannot load the data).`;
+    return;
+  }
+  calib = await get('calibration.json').catch(() => ({}));
   const slugs = Object.keys(curves).sort((a, b) => curves[b].d10_km - curves[a].d10_km);
   $('sp').innerHTML = slugs.map(s => `<option value="${s}">${s} (10% at ${curves[s].d10_km} km)</option>`).join('');
   $('sp').onchange = () => load($('sp').value);
-  $('scale').oninput = draw;
-  $('period').onchange = draw;
+  $('period').onchange = setSource;
+  $('scale').oninput = update;
   load(slugs[0]);
 })();
 </script>
