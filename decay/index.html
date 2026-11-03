@@ -34,8 +34,8 @@
 <script src="https://cdn.jsdelivr.net/npm/geotiff@2.1.3/dist-browser/geotiff.js" integrity="sha384-m5adk5PRgt3JjiYbYoG8oXxc3EgRFKc1aCBgKzyxqxnbYpdiAMlHkR0gVDp03Q/H" crossorigin="anonymous"></script>
 <script>
 const $ = id => document.getElementById(id);
-const DOWN = 4; // read the 4x overview, ~1.9k px wide
-let curves, calib = {}, ens, now, future, dist, w, h, curve;
+let DOWN = 4; // read the 4x overview, ~1.9k px wide
+let base = 'out/', curves, calib = {}, ens, now, future, dist, w, h, curve;
 
 // sequential ramp, light to dark green, 0..99
 const ramp = Array.from({ length: 100 }, (_, i) => {
@@ -87,11 +87,11 @@ function draw() {
 }
 
 async function load(slug) {
-  const tiff = await GeoTIFF.fromUrl(`out/${slug}_decay.tif`);
+  const tiff = await GeoTIFF.fromUrl(`${base}${slug}_decay.tif`);
   const full = await tiff.getImage();
   w = Math.floor(full.getWidth() / DOWN); h = Math.floor(full.getHeight() / DOWN);
   [now, dist] = await tiff.readRasters({ width: w, height: h, resampleMethod: 'nearest' });
-  future = await GeoTIFF.fromUrl(`out/${slug}_ens_2071-2100.tif`)
+  future = await GeoTIFF.fromUrl(`${base}${slug}_ens_2071-2100.tif`)
     .then(t => t.readRasters({ width: w, height: h, resampleMethod: 'nearest' })).then(r => r[0]).catch(() => null);
   curve = curves[slug].curve;
   showCalib(slug);
@@ -125,8 +125,12 @@ $('map').addEventListener('mousemove', ev => {
 });
 
 (async () => {
-  curves = await (await fetch('out/curves.json')).json();
-  calib = await fetch('out/calibration.json').then(r => r.ok ? r.json() : {}).catch(() => ({}));
+  // local evidence_decay.py output if present, else the committed demo/ copy (already 4x downsampled)
+  let r = await fetch('out/curves.json').catch(() => null);
+  if (!r?.ok) { base = 'demo/'; DOWN = 1; r = await fetch('demo/curves.json').catch(() => null); }
+  if (!r?.ok) { $('readout').textContent = 'No data loaded. Open https://wietzesuijker.github.io/sdm-pmtiles/decay/ or run python3 serve.py at the repo root (file:// cannot load the data).'; return; }
+  curves = await r.json();
+  calib = await fetch(`${base}calibration.json`).then(r => r.ok ? r.json() : {}).catch(() => ({}));
   const slugs = Object.keys(curves).sort((a, b) => curves[b].d10_km - curves[a].d10_km);
   $('sp').innerHTML = slugs.map(s => `<option value="${s}">${s} (10% at ${curves[s].d10_km} km)</option>`).join('');
   $('sp').onchange = () => load($('sp').value);
