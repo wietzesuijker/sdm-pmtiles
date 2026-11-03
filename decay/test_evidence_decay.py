@@ -52,3 +52,16 @@ def test_calibration_recovers_true_stretch():
         total, logs = loglik(ens, dist, curve, rows, cols, s)
         ll[s] = logs.mean() - np.log(total)
     assert max(ll, key=ll.get) == 0.5
+
+
+def test_uniform_effort_leaves_calibration_unchanged():
+    from calibrate import EFFORT_KM, loglik
+
+    curve = 1 / (1 + np.arange(MAX_KM + 1) / 30)
+    ens, clip, dist, _ = synthetic(curve)
+    rows, cols = np.array([10, 100, 150]), np.array([20, 100, 199])
+    effort = np.full((-(-200 // EFFORT_KM),) * 2, 7.0)
+    for s in (0, 0.5, 1, float("inf")):
+        total, logs = loglik(ens, dist, curve, rows, cols, s)
+        total_e, logs_e = loglik(ens, dist, curve, rows, cols, s, effort)
+        assert np.allclose(logs - np.log(total), logs_e - np.log(total_e))

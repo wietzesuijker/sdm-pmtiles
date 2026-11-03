@@ -22,9 +22,10 @@
   <p class="muted">The clipped SDM is the ensemble times a curve of distance to the evidence mask. This page recomputes it in the browser. Stretch 1 rebuilds the published layer, 0 is a hard clip to the mask, above 1 is a looser decay.</p>
   <div class="bar">
     <label>Species <select id="sp"></select></label>
-    <label>Decay stretch <input id="scale" type="range" min="0" max="3" step="0.05" value="1"> <output id="sv">1.00</output></label>
+    <label>Decay stretch <input id="scale" type="range" min="0" max="3" step="0.0125" value="1"> <output id="sv">1.00</output></label>
     <span>50% at <output id="d50"></output>, 10% at <output id="d10"></output></span>
   </div>
+  <p id="calib" class="muted"></p>
   <canvas id="map"></canvas>
   <p id="readout" class="muted">Hover the map for values.</p>
 </main>
@@ -32,7 +33,7 @@
 <script>
 const $ = id => document.getElementById(id);
 const DOWN = 4; // read the 4x overview, ~1.9k px wide
-let curves, ens, dist, w, h, curve;
+let curves, calib = {}, ens, dist, w, h, curve;
 
 // sequential ramp, light to dark green, 0..99
 const ramp = Array.from({ length: 100 }, (_, i) => {
@@ -73,8 +74,24 @@ async function load(slug) {
   w = Math.floor(full.getWidth() / DOWN); h = Math.floor(full.getHeight() / DOWN);
   [ens, dist] = await tiff.readRasters({ width: w, height: h, resampleMethod: 'nearest' });
   curve = curves[slug].curve;
+  showCalib(slug);
   Object.assign($('map'), { width: w, height: h });
   draw();
+}
+
+// best stretch for GBIF records from 2025 and 2026, from calibrate.py; inf = raw ensemble
+function showCalib(slug) {
+  const c = calib[slug];
+  if (!c || !c.raw) { $('calib').textContent = 'No calibration against new records for this species.'; return; }
+  const fit = (label, r) => {
+    const ci = r.ci90.map(v => v === 'inf' ? '∞' : v).join(' to ');
+    const s = r.best_stretch === 'inf' ? 3 : Math.min(r.best_stretch, 3);
+    return `${label} <button data-s="${s}">stretch ${r.best_stretch === 'inf' ? '∞' : r.best_stretch}</button> (90% ${ci})`;
+  };
+  const parts = [fit('raw', c.raw)];
+  if (c.target_group) parts.push(fit('bias-corrected', c.target_group));
+  $('calib').innerHTML = `${c.n_new} new GBIF records (2025 to 2026, ${c.outside_mask} outside the mask) fit best at: ${parts.join(', ')}.`;
+  $('calib').querySelectorAll('button').forEach(b => b.onclick = () => { $('scale').value = b.dataset.s; draw(); });
 }
 
 $('map').addEventListener('mousemove', ev => {
@@ -90,6 +107,7 @@ $('map').addEventListener('mousemove', ev => {
 
 (async () => {
   curves = await (await fetch('out/curves.json')).json();
+  calib = await fetch('out/calibration.json').then(r => r.ok ? r.json() : {}).catch(() => ({}));
   const slugs = Object.keys(curves).sort((a, b) => curves[b].d10_km - curves[a].d10_km);
   $('sp').innerHTML = slugs.map(s => `<option value="${s}">${s} (10% at ${curves[s].d10_km} km)</option>`).join('');
   $('sp').onchange = () => load($('sp').value);
