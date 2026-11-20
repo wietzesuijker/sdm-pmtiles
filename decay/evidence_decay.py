@@ -11,7 +11,8 @@ ensemble * g(km to the nearest mask cell), with one monotone curve g per
 species. This fits g as a 1 km lookup table, checks it rebuilds the clipped
 layer, and writes what a browser needs to recompute the clip with a different
 decay: the curve (curves.json) and a two-band raster (<slug>_decay.tif:
-ensemble, km to the mask), plus the future ensembles (<slug>_ens_<period>.tif).
+ensemble, km to the mask), plus the future ensembles (<slug>_ens_<period>.tif) and their clipped
+COGs (<slug>_sdm-ensemble-clipped_1km_na_<period>_sett1.tif, evidence fixed at 1980-2010).
 
     decay/evidence_decay.py ursus-arctos gulo-gulo   # -> decay/out/
 """
@@ -83,7 +84,7 @@ def run(slug: str, out: Path) -> dict:
 
     ens, profile = read("sdm-ensemble")
     clip, _ = read("sdm-clip")
-    clipped, _ = read("sdm-ensemble-clipped")
+    clipped, cprofile = read("sdm-ensemble-clipped")
     dist = distance_km(clip)
     curve = fit_curve(ens, clip, clipped, dist)
     valid = (ens != NODATA) & (clipped != NODATA)
@@ -97,6 +98,10 @@ def run(slug: str, out: Path) -> dict:
         fut, _ = read("sdm-ensemble", period)
         with rasterio.open(out / f"{slug}_ens_{period}.tif", "w", **{**profile, "count": 1}) as dst:
             dst.write(fut.astype(np.uint16), 1)
+        # evidence (clip, dist, curve) stays fixed at 1980-2010; named like the bucket product
+        cprofile.update(driver="COG", compress="DEFLATE", overview_resampling="nearest")
+        with rasterio.open(out / f"{slug}_sdm-ensemble-clipped_1km_na_{period}_sett1.tif", "w", **cprofile) as dst:
+            dst.write(apply_curve(fut, clip, dist, curve), 1)
     return {
         "d50_km": km_below(curve, 0.5),
         "d10_km": km_below(curve, 0.1),
