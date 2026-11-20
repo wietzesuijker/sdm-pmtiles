@@ -101,8 +101,11 @@ def run(slug: str, out: Path) -> dict:
         # evidence (clip, dist, curve) stays fixed at 1980-2010; named like the bucket product
         cprofile.update(driver="COG", compress="DEFLATE", overview_resampling="nearest")
         with rasterio.open(out / f"{slug}_sdm-ensemble-clipped_1km_na_{period}_sett1.tif", "w", **cprofile) as dst:
-            dst.write(apply_curve(fut, clip, dist, curve), 1)
+            fclip = apply_curve(fut, clip, dist, curve)
+            dst.write(fclip, 1)
+    ok = fclip != NODATA
     return {
+        "future_ratio": round(float(fclip[ok].sum(dtype=np.int64) / clipped[clipped != NODATA].sum(dtype=np.int64)), 4),
         "d50_km": km_below(curve, 0.5),
         "d10_km": km_below(curve, 0.1),
         "rebuild_within_1": round(float(np.mean(err[valid] <= 1)), 5),
