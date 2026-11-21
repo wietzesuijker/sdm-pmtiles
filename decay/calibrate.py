@@ -151,15 +151,32 @@ def score(per: dict) -> dict:
 
 def run(slug: str, keys: list[str], curve: np.ndarray, cls: str, months: str = "") -> dict:
     import rasterio
-    from rasterio.warp import transform
 
     with rasterio.open(OUT / f"{slug}_decay.tif") as src:
         ens, dist = src.read()
         crs, tf = src.crs, src.transform
-    ens = ens.astype(np.int16)
+    rows, cols = new_records(slug, keys, months, ens.astype(np.int16), crs, tf)
+    n = len(rows)
+    if n < 10:
+        return {"n_new": n}
+    effort = class_effort(cls, months, crs, tf, ens.shape)
+    out = {"n_new": n, "outside_mask": int((dist[rows, cols] > 0).sum())}
+    for name, e in (("raw", None), ("target_group", effort)):
+        per = {}
+        for s in STRETCHES:
+            total, logs = loglik(ens.astype(np.int16), dist, curve, rows, cols, s, e)
+            per[s] = logs - np.log(total)
+        out[name] = score(per)
+    return out
+
+
+def new_records(slug: str, keys: list[str], months: str, ens: np.ndarray, crs, tf) -> tuple[np.ndarray, np.ndarray]:
+    """Cells of YEARS GBIF records on the model grid, more than EXCLUDE_KM from any training point."""
+    from rasterio.warp import transform
+
     lonlat = gbif_points(keys, months)
     if not len(lonlat):
-        return {"n_new": 0}
+        return np.array([], int), np.array([], int)
     x, y = transform("EPSG:4326", crs, lonlat[:, 0], lonlat[:, 1])
     rows, cols = rasterio_rowcol(tf, x, y)
     ok = (rows >= 0) & (rows < ens.shape[0]) & (cols >= 0) & (cols < ens.shape[1])
@@ -174,19 +191,7 @@ def run(slug: str, keys: list[str], curve: np.ndarray, cls: str, months: str = "
     near[tr[keep], tc[keep]] = True
     near = ndimage.binary_dilation(near, iterations=EXCLUDE_KM)
     ok = ~near[rows, cols]
-    rows, cols = rows[ok], cols[ok]
-    n = len(rows)
-    if n < 10:
-        return {"n_new": n}
-    effort = class_effort(cls, months, crs, tf, ens.shape)
-    out = {"n_new": n, "outside_mask": int((dist[rows, cols] > 0).sum())}
-    for name, e in (("raw", None), ("target_group", effort)):
-        per = {}
-        for s in STRETCHES:
-            total, logs = loglik(ens, dist, curve, rows, cols, s, e)
-            per[s] = logs - np.log(total)
-        out[name] = score(per)
-    return out
+    return rows[ok], cols[ok]
 
 
 if __name__ == "__main__":
