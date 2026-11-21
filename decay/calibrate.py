@@ -52,7 +52,7 @@ CLASS_KEYS = {"Mammals": ["359"], "Birds": ["212"], "Amphibians": ["131"],
 EFFORT_KM = 25  # target-group grid; map squares at zoom 4 are ~0.35 deg
 
 
-def fetch(url: str, tries: int = 6) -> bytes:
+def fetch(url: str, tries: int = 9) -> bytes:
     """GET with backoff on GBIF's 429 and 5xx answers."""
     for i in range(tries):
         try:
