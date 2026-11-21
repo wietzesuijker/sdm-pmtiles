@@ -80,3 +80,9 @@ python decay/pool.py decay/out/calibration_all.jsonl
 ```
 
 Run long batches under `caffeinate -i`: when the Mac sleeps, bucket and GBIF reads fail with DNS errors. Both batch scripts resume and skip species already in the log; remove the failed lines to retry them.
+
+## References
+
+- Merow C, Wilson AM, Jetz W. 2017. Integrating occurrence data and expert maps for improved species range predictions. Global Ecology and Biogeography 26(2): 243-258. doi:10.1111/geb.12539
+- Mendes P, Velazco SJE, de Andrade AFA, De Marco P. 2020. Dealing with overprediction in species distribution models: How adding distance constraints can improve model accuracy. Ecological Modelling 431: 109180. doi:10.1016/j.ecolmodel.2020.109180
+- Phillips SJ, Dudík M, Elith J, Graham CH, Lehmann A, Leathwick J, Ferrier S. 2009. Sample selection bias and presence-only distribution models: implications for background and pseudo-absence data. Ecological Applications 19(1): 181-197. doi:10.1890/07-2153.1
