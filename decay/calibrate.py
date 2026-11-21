@@ -28,6 +28,7 @@ import io
 import json
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -51,6 +52,18 @@ CLASS_KEYS = {"Mammals": ["359"], "Birds": ["212"], "Amphibians": ["131"],
 EFFORT_KM = 25  # target-group grid; map squares at zoom 4 are ~0.35 deg
 
 
+def fetch(url: str, tries: int = 6) -> bytes:
+    """GET with backoff on GBIF's 429 and 5xx answers."""
+    for i in range(tries):
+        try:
+            return urllib.request.urlopen(url, timeout=60).read()
+        except urllib.error.HTTPError as e:
+            if e.code != 429 and e.code < 500 or i == tries - 1:
+                raise
+            time.sleep(float(e.headers.get("Retry-After") or 0) or 5 * 2**i)
+    raise AssertionError("unreachable")
+
+
 def gbif_points(keys: list[str], months: str = "") -> np.ndarray:
     pts = []
     for key in keys:
@@ -58,7 +71,7 @@ def gbif_points(keys: list[str], months: str = "") -> np.ndarray:
         while len(pts) < MAX_RECORDS:
             q = (f"{GBIF}?taxonKey={key}&year={YEARS}&hasCoordinate=true&hasGeospatialIssue=false"
                  f"&occurrenceStatus=PRESENT&decimalLongitude=-180,-50&decimalLatitude=10,85&limit=300&offset={offset}{months}")
-            page = json.load(urllib.request.urlopen(q, timeout=60))
+            page = json.loads(fetch(q))
             pts += [(r["decimalLongitude"], r["decimalLatitude"]) for r in page["results"]
                     if (r.get("coordinateUncertaintyInMeters") or 0) <= 5000]
             offset += 300
@@ -87,7 +100,7 @@ def class_effort(cls: str, months: str, crs, tf, shape) -> np.ndarray:
             q = (f"{GBIF_MAP}/4/{tx}/{ty}.mvt?srs=EPSG:4326&year={YEARS}&hasGeospatialIssue=false"
                  f"&bin=square&squareSize=16{taxa}{months}")
             try:
-                layer = mapbox_vector_tile.decode(urllib.request.urlopen(q, timeout=60).read()).get("occurrence")
+                layer = mapbox_vector_tile.decode(fetch(q)).get("occurrence")
             except urllib.error.HTTPError as e:  # GBIF answers 400 for some empty tiles
                 if b"missing the expected layer" not in e.read():
                     raise
