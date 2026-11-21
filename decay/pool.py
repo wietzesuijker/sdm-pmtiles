@@ -7,8 +7,10 @@
 
 Reads calibrate_batch.py's log. The family is the parametric one (exp or halfnormal) with the higher
 summed log-likelihood over scored species. Each species' log(scale) is shrunk towards its class mean
-(normal-normal empirical Bayes, standard error from the bootstrap 90% interval). Unscored species get
-the class value. Writes decay_pooled.json next to the log and prints a summary.
+(normal-normal empirical Bayes, standard error from the block-bootstrap 90% interval). Unscored species get
+the class value. Each species' 2071-2100 / 1980-2010 change is read at its pooled scale and at the ends of its
+90% posterior interval, so the count of species that gain comes with a range. Writes decay_pooled.json next to
+the log and prints a summary.
 
     decay/pool.py decay/out/calibration_all.jsonl
 """
@@ -21,16 +23,23 @@ from pathlib import Path
 
 import numpy as np
 
+SCALES = [1, 2, 5, 10, 20, 40, 80, 160, 320, 640, 1280, 2560]  # km, as in calibrate_batch.py
+Z90 = 1.645
 MIN_SE = 0.35  # about half a grid step in log scale; the grid cannot resolve less
 
 
-def shrink(y: np.ndarray, se: np.ndarray) -> tuple[np.ndarray, float, float]:
-    """Posterior means, class mean and between-species sd for estimates y with standard errors se."""
+def shrink(y: np.ndarray, se: np.ndarray) -> tuple[np.ndarray, np.ndarray, float, float]:
+    """Posterior means and sds, class mean and between-species sd for estimates y with standard errors se."""
     w = 1 / se**2
     mu = float((w * y).sum() / w.sum())
     tau2 = max(float(np.var(y) - np.mean(se**2)), 1e-6)
     b = tau2 / (tau2 + se**2)
-    return b * y + (1 - b) * mu, mu, tau2**0.5
+    return b * y + (1 - b) * mu, (b * se**2) ** 0.5, mu, tau2**0.5
+
+
+def change_at(ratios: list[float], log_scale: float) -> float:
+    """Change at a scale, interpolated in log scale and log ratio between the grid values."""
+    return float(np.exp(np.interp(log_scale, np.log(SCALES), np.log(ratios))))
 
 
 def main(log: Path) -> dict:
@@ -43,27 +52,42 @@ def main(log: Path) -> dict:
         by_class[r["class"]].append(r)
     out, classes = {}, {}
     for cls, rs in by_class.items():
-        y = np.log([r[fam]["best"] for r in rs])
+        y = np.log([r[fam].get("fit", r[fam]["best"]) for r in rs])
         lo, hi = np.log([[r[fam]["ci90"][0], r[fam]["ci90"][1]] for r in rs]).T
-        post, mu, sd = shrink(y, np.maximum((hi - lo) / 3.29, MIN_SE))
-        classes[cls] = {"n": len(rs), "scale_km": round(float(np.exp(mu)), 1), "between_sd_log": round(sd, 3)}
-        for r, p in zip(rs, post):
-            out[r["slug"]] = {"scale_km": round(float(np.exp(p)), 1), "own_km": r[fam]["best"], "n_new": r["n_new"]}
+        post, psd, mu, sd = shrink(y, np.maximum((hi - lo) / 3.29, MIN_SE))
+        classes[cls] = {"n": len(rs), "mu": mu, "sd": sd,
+                        "scale_km": round(float(np.exp(mu)), 1), "between_sd_log": round(sd, 3)}
+        for r, p, q in zip(rs, post, psd):
+            out[r["slug"]] = {"log_scale": (p, q), "own_km": r[fam].get("fit", r[fam]["best"]), "n_new": r["n_new"]}
     for r in rows:
         if r["slug"] not in out and r.get("class") in classes:
-            out[r["slug"]] = {"scale_km": classes[r["class"]]["scale_km"], "own_km": None, "n_new": r.get("n_new", 0)}
+            c = classes[r["class"]]
+            out[r["slug"]] = {"log_scale": (c["mu"], c["sd"]), "own_km": None, "n_new": r.get("n_new", 0)}
+    by_slug = {r["slug"]: r for r in rows}
+    gains = np.zeros(3, int)  # at the low end, the pooled scale, the high end of each species' interval
+    for slug, o in out.items():
+        p, q = o.pop("log_scale")
+        o["scale_km"] = round(float(np.exp(p)), 1)
+        ch = [change_at(by_slug[slug]["change"][fam], x) for x in (p - Z90 * q, p, p + Z90 * q)]
+        o["change"], o["change_ci90"] = round(ch[1], 4), [round(min(ch[0], ch[2]), 4), round(max(ch[0], ch[2]), 4)]
+        gains += np.array(ch) > 1
+    for c in classes.values():
+        del c["mu"], c["sd"]
     beats = sum(max(r["exp"]["ll"], r["halfnormal"]["ll"]) > r["ll_published"] for r in scored)
     summary = {"family": fam, "ll_total": {k: round(v, 1) for k, v in totals.items()},
                "ll_total_published": round(sum(r["ll_published"] for r in scored), 1),
                "n_rows": len(rows), "n_scored": len(scored), "parametric_beats_published": beats,
+               "species_gaining": {"pooled": int(gains[1]), "tight_end": int(gains[0]), "wide_end": int(gains[2]),
+                                   "of": len(out)},
                "winner_counts": {f: sum(r["winner"][0] == f for r in scored) for f in totals}, "classes": classes}
     (log.parent / "decay_pooled.json").write_text(json.dumps({"summary": summary, "species": out}, indent=1))
     return summary
 
 
 def test_shrink():
-    post, mu, _ = shrink(np.array([0.0, 4.0]), np.array([0.1, 10.0]))
+    post, _, mu, _ = shrink(np.array([0.0, 4.0]), np.array([0.1, 10.0]))
     assert abs(post[0]) < 0.1 and abs(post[1] - mu) < 0.5  # precise estimate kept, noisy one pulled in
+    assert abs(change_at([1, 2] + [2] * 10, np.log(np.sqrt(2))) - 2**0.5) < 1e-9  # halfway between 1 and 2 km
 
 
 if __name__ == "__main__":

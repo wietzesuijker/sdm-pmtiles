@@ -13,6 +13,11 @@ writing rasters, and over three decay families of d = km to the evidence mask:
     exp         exp(-d / tau)
     halfnormal  exp(-d^2 / (2 sigma^2))
 
+tau and sigma are fitted by maximum likelihood; intervals come from a bootstrap
+that resamples 25 km blocks of records, since records cluster. For every species,
+scored or not, it also records the 2071-2100 / 1980-2010 suitability ratio at
+each grid scale, so pool.py can give the change at the pooled scale.
+
 Appends one JSON line per species to the log and skips species already in it.
 
     decay/calibrate_batch.py decay/out/calibration_all.jsonl [jobs]
@@ -27,6 +32,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
 import numpy as np
+from scipy.optimize import minimize_scalar
 
 from calibrate import (
     BREEDING,
@@ -42,11 +48,12 @@ from evidence_decay import BUCKET, MAX_KM, NODATA, distance_km, fit_curve
 SCALES = [1, 2, 5, 10, 20, 40, 80, 160, 320, 640, 1280, 2560]  # km, for tau and sigma
 KM = np.arange(MAX_KM + 1)
 BOOT = 200
+SHAPES = {"exp": lambda v: np.exp(-KM / v), "halfnormal": lambda v: np.exp(-(KM / v) ** 2 / 2)}
 _effort: dict = {}  # per worker: (class, months) -> effort grid, the same for every species
 
 
 def tables(curve: np.ndarray) -> dict[tuple[str, float], np.ndarray]:
-    """Decay value per km for every candidate, keyed (family, parameter)."""
+    """Decay value per km for every grid candidate, keyed (family, parameter)."""
     t = {}
     for s in STRETCHES:
         if s == float("inf"):
@@ -55,9 +62,9 @@ def tables(curve: np.ndarray) -> dict[tuple[str, float], np.ndarray]:
             t["stretch", s] = (KM == 0).astype(float)
         else:
             t["stretch", s] = curve[np.minimum(np.floor(KM / s + 0.5), MAX_KM).astype(int)]
-    for v in SCALES:
-        t["exp", v] = np.exp(-KM / v)
-        t["halfnormal", v] = np.exp(-(KM / v) ** 2 / 2)
+    for f, g in SHAPES.items():
+        for v in SCALES:
+            t[f, v] = g(v)
     return t
 
 
@@ -65,35 +72,57 @@ def one(slug: str, keys: list[str], cls: str) -> dict:
     import rasterio
 
     try:
-        def read(product):
-            with rasterio.open(f"{BUCKET}/{slug}_{product}_1km_na_1980-2010_sett1.tif") as src:
+        def read(product, period="1980-2010"):
+            with rasterio.open(f"{BUCKET}/{slug}_{product}_1km_na_{period}_sett1.tif") as src:
                 return src.read(1), src.crs, src.transform
 
         ens, crs, tf = read("sdm-ensemble")
         clip, clipped = read("sdm-clip")[0], read("sdm-ensemble-clipped")[0]
+        fut = read("sdm-ensemble", "2071-2100")[0]
         dist = distance_km(clip)
         curve = fit_curve(ens, clip, clipped, dist)
+        res = {"slug": slug, "ok": True, "class": cls, "change": change(ens, fut, dist)}
         ens = ens.astype(np.int16)
         months = BREEDING if cls == "Birds" else ""
         rows, cols = new_records(slug, keys, months, ens, crs, tf)
-        n = len(rows)
+        res["n_new"] = n = len(rows)
         if n < 10:
-            return {"slug": slug, "ok": True, "class": cls, "n_new": n}
+            return res
         key = (cls, months, tuple(tf), ens.shape)
         if key not in _effort:
             _effort[key] = class_effort(cls, months, crs, tf, ens.shape)
         effort = _effort[key]
         k = EFFORT_KM
         at = effort[rows // k, cols // k]
-        per = {}
-        for c, table in tables(curve).items():
+
+        def ll(table):
+            """Log-likelihood of each record."""
             lam = np.where(ens == NODATA, 0, np.maximum(ens * table[dist], EPS))
-            per[c] = np.log(lam[rows, cols] * at) - np.log((block_sum(lam, k) * effort).sum())
-        return {"slug": slug, "ok": True, "class": cls, "n_new": n,
-                "outside_mask": int((dist[rows, cols] > 0).sum()), **summarise(per)}
+            return np.log(lam[rows, cols] * at) - np.log((block_sum(lam, k) * effort).sum())
+
+        per = {c: ll(t) for c, t in tables(curve).items()}
+        fits = {}
+        for f, g in SHAPES.items():
+            v = max(SCALES, key=lambda v: per[f, v].mean())
+            lo, hi = np.log(max(v / 2.5, 0.25)), np.log(min(v * 2.5, MAX_KM))
+            r = minimize_scalar(lambda x, g=g: -ll(g(np.exp(x))).mean(), bounds=(lo, hi), method="bounded",
+                                options={"xatol": 0.02})
+            fits[f] = (round(float(np.exp(r.x)), 2), round(-float(r.fun), 4))
+        blocks = np.unique((rows // k) * 100_000 + cols // k, return_inverse=True)[1]
+        res.update(outside_mask=int((dist[rows, cols] > 0).sum()), n_blocks=int(blocks.max() + 1),
+                   **summarise(per, fits, blocks))
+        return res
     # network, raster, GBIF and ogr2ogr failures; one bad species must not stop the batch
     except (OSError, ValueError, KeyError, IndexError, subprocess.CalledProcessError) as e:
         return {"slug": slug, "ok": False, "error": f"{type(e).__name__}: {e}"[:300]}
+
+
+def change(ens: np.ndarray, fut: np.ndarray, dist: np.ndarray) -> dict:
+    """2071-2100 / 1980-2010 total suitability, both clipped with the same decay, at each grid scale."""
+    ok = (ens != NODATA) & (fut != NODATA)
+    d, now, later = dist[ok], ens[ok].astype(float), fut[ok].astype(float)
+    return {f: [round(float((later * g(v)[d]).sum() / max((now * g(v)[d]).sum(), 1)), 4) for v in SCALES]
+            for f, g in SHAPES.items()}
 
 
 def j(p: float) -> float | str:
@@ -101,8 +130,8 @@ def j(p: float) -> float | str:
     return "inf" if p == float("inf") else p
 
 
-def summarise(per: dict) -> dict:
-    """Best parameter and mean log-likelihood per family, the overall winner, and bootstrap spread."""
+def summarise(per: dict, fits: dict, blocks: np.ndarray) -> dict:
+    """Best parameter and mean log-likelihood per family, the winner, and a block-bootstrap spread on the grid."""
     def best(idx=slice(None)):
         means = {c: v[idx].mean() for c, v in per.items()}
         fam = {}
@@ -112,15 +141,19 @@ def summarise(per: dict) -> dict:
         return fam, max(means, key=means.get)
 
     fam, win = best()
-    n = len(next(iter(per.values())))
-    boots = [best(i) for i in np.random.default_rng(0).integers(0, n, (BOOT, n))]
+    members = [np.flatnonzero(blocks == b) for b in range(blocks.max() + 1)]
+    rng = np.random.default_rng(0)
+    boots = [best(np.concatenate([members[b] for b in rng.integers(0, len(members), len(members))]))
+             for _ in range(BOOT)]
     out = {"winner": [win[0], j(win[1])],
-           "winner_share": {f: sum(b[1][0] == f for b in boots) / BOOT for f in ("stretch", "exp", "halfnormal")},
+           "winner_share": {f: sum(b[1][0] == f for b in boots) / BOOT for f in ("stretch", *SHAPES)},
            "ll_published": round(float(per["stretch", 1].mean()), 4)}
     for f, p in fam.items():
         ps = sorted(b[0][f] for b in boots)
         out[f] = {"best": j(p), "ll": round(float(per[f, p].mean()), 4),
                   "ci90": [j(ps[int(0.05 * BOOT)]), j(ps[int(0.95 * BOOT) - 1])]}
+        if f in fits:
+            out[f]["fit"], out[f]["ll_fit"] = fits[f]
     return out
 
 

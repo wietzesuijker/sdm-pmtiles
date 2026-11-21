@@ -48,7 +48,11 @@ Change = total suitability in 2071-2100 / total in 1980-2010. Over all 1,968 spe
 - `exp`: exp(-d / tau), tau in {1, 2, 5, 10, 20, 40, 80, 160, 320, 640, 1280, 2560} km. This is the paper's shape, measured to the evidence mask, not to the IUCN range.
 - `halfnormal`: exp(-d^2 / (2 sigma^2)), sigma on the same grid.
 
-**Uncertainty.** 200 bootstrap resamples of the records give a 90% interval for the best parameter in each family and how often each family wins.
+For `exp` and `halfnormal`, the best grid value is then refined by maximum likelihood (bounded 1-D search in log scale, from 0.25 km), stored as `fit`.
+
+**Uncertainty.** New records cluster along roads, trails and towns, so records are not independent. The bootstrap resamples 25 km blocks of records (the effort grid cells), not single records, 200 times. This gives a 90% interval for the best grid parameter in each family and how often each family wins.
+
+**Change by 2100.** For every species, scored or not, the run also stores the 2071-2100 / 1980-2010 total suitability ratio with both periods clipped by `exp` and by `halfnormal` at each grid scale (`change`).
 
 **Output.** One JSON line per species in `out/calibration_all.jsonl`: `n_new`, `outside_mask`, the overall winner, `winner_share`, `ll_published` (score at s = 1), and for each family the best parameter, its score and 90% interval.
 
@@ -56,8 +60,11 @@ Change = total suitability in 2071-2100 / total in 1980-2010. Over all 1,968 spe
 
 Many species have few new records, so their own best parameter is noisy. For the chosen family, take log(best parameter) per species with its bootstrap spread, and shrink each towards the mean of its class (empirical Bayes, normal-normal). Species with many records keep their own value. Species with few records move towards the class value. Species with fewer than 10 records get the class value.
 
+Each species' change by 2100 is read at its pooled scale and at both ends of its 90% posterior interval (interpolated between grid scales). `species_gaining` counts the species with a gain at the pooled scale, at the tight end and at the wide end, so the gain count comes with a range.
+
 ## Limits
 
+- The decay multiplies a fixed ensemble after fitting. Merow et al. (2017) instead fit the range term inside the SDM. Doing that here needs a refit of the ensembles, which this repo does not do.
 - One 2-year window of new records.
 - The class is a broad target group: a birder and a herper do not survey the same places.
 - The effort grid is 25 km, coarser than the 1 km maps.
