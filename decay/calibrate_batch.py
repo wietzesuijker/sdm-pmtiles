@@ -20,6 +20,7 @@ Appends one JSON line per species to the log and skips species already in it.
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 import urllib.request
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -27,7 +28,15 @@ from pathlib import Path
 
 import numpy as np
 
-from calibrate import BREEDING, EFFORT_KM, EPS, STRETCHES, block_sum, class_effort, new_records
+from calibrate import (
+    BREEDING,
+    EFFORT_KM,
+    EPS,
+    STRETCHES,
+    block_sum,
+    class_effort,
+    new_records,
+)
 from evidence_decay import BUCKET, MAX_KM, NODATA, distance_km, fit_curve
 
 SCALES = [1, 2, 5, 10, 20, 40, 80, 160, 320, 640, 1280, 2560]  # km, for tau and sigma
@@ -82,7 +91,8 @@ def one(slug: str, keys: list[str], cls: str) -> dict:
             per[c] = np.log(lam[rows, cols] * at) - np.log((block_sum(lam, k) * effort).sum())
         return {"slug": slug, "ok": True, "class": cls, "n_new": n,
                 "outside_mask": int((dist[rows, cols] > 0).sum()), **summarise(per)}
-    except Exception as e:  # one bad species must not stop the batch
+    # network, raster, GBIF and ogr2ogr failures; one bad species must not stop the batch
+    except (OSError, ValueError, KeyError, IndexError, subprocess.CalledProcessError) as e:
         return {"slug": slug, "ok": False, "error": f"{type(e).__name__}: {e}"[:300]}
 
 
