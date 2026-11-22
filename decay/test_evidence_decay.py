@@ -23,6 +23,18 @@ def test_round_trip_recovers_published_clip():
     assert (clipped[0, :5] == 255).all()
 
 
+def test_clipped_future_uses_current_evidence():
+    curve = 1 / (1 + np.arange(MAX_KM + 1) / 30)
+    ens, clip, dist, clipped = synthetic(curve)
+    fut = np.where(ens == 255, 255, ens // 2).astype(np.uint8)
+    out = apply_curve(fut, clip, dist, curve)
+    assert out.dtype == np.uint8
+    assert (out[fut == 255] == 255).all() and (out[fut != 255] <= 99).all()
+    assert (out[clip == 1] == fut[clip == 1]).all()
+    assert (out <= clipped).all()
+    assert (apply_curve(ens.copy(), clip, dist, curve) == clipped).all()
+
+
 def test_scale_zero_is_hard_clip_and_inside_untouched():
     ens, clip, dist, _ = synthetic(np.ones(MAX_KM + 1))
     hard = apply_curve(ens, clip, dist, np.ones(MAX_KM + 1), scale=0)

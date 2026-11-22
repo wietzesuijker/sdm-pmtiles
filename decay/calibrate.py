@@ -28,6 +28,7 @@ import io
 import json
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -51,6 +52,18 @@ CLASS_KEYS = {"Mammals": ["359"], "Birds": ["212"], "Amphibians": ["131"],
 EFFORT_KM = 25  # target-group grid; map squares at zoom 4 are ~0.35 deg
 
 
+def fetch(url: str, tries: int = 9) -> bytes:
+    """GET with backoff on GBIF's 429 and 5xx answers."""
+    for i in range(tries):
+        try:
+            return urllib.request.urlopen(url, timeout=60).read()
+        except urllib.error.HTTPError as e:
+            if e.code != 429 and e.code < 500 or i == tries - 1:
+                raise
+            time.sleep(float(e.headers.get("Retry-After") or 0) or 5 * 2**i)
+    raise AssertionError("unreachable")
+
+
 def gbif_points(keys: list[str], months: str = "") -> np.ndarray:
     pts = []
     for key in keys:
@@ -58,7 +71,7 @@ def gbif_points(keys: list[str], months: str = "") -> np.ndarray:
         while len(pts) < MAX_RECORDS:
             q = (f"{GBIF}?taxonKey={key}&year={YEARS}&hasCoordinate=true&hasGeospatialIssue=false"
                  f"&occurrenceStatus=PRESENT&decimalLongitude=-180,-50&decimalLatitude=10,85&limit=300&offset={offset}{months}")
-            page = json.load(urllib.request.urlopen(q, timeout=60))
+            page = json.loads(fetch(q))
             pts += [(r["decimalLongitude"], r["decimalLatitude"]) for r in page["results"]
                     if (r.get("coordinateUncertaintyInMeters") or 0) <= 5000]
             offset += 300
@@ -87,7 +100,7 @@ def class_effort(cls: str, months: str, crs, tf, shape) -> np.ndarray:
             q = (f"{GBIF_MAP}/4/{tx}/{ty}.mvt?srs=EPSG:4326&year={YEARS}&hasGeospatialIssue=false"
                  f"&bin=square&squareSize=16{taxa}{months}")
             try:
-                layer = mapbox_vector_tile.decode(urllib.request.urlopen(q, timeout=60).read()).get("occurrence")
+                layer = mapbox_vector_tile.decode(fetch(q)).get("occurrence")
             except urllib.error.HTTPError as e:  # GBIF answers 400 for some empty tiles
                 if b"missing the expected layer" not in e.read():
                     raise
@@ -151,15 +164,32 @@ def score(per: dict) -> dict:
 
 def run(slug: str, keys: list[str], curve: np.ndarray, cls: str, months: str = "") -> dict:
     import rasterio
-    from rasterio.warp import transform
 
     with rasterio.open(OUT / f"{slug}_decay.tif") as src:
         ens, dist = src.read()
         crs, tf = src.crs, src.transform
-    ens = ens.astype(np.int16)
+    rows, cols = new_records(slug, keys, months, ens.astype(np.int16), crs, tf)
+    n = len(rows)
+    if n < 10:
+        return {"n_new": n}
+    effort = class_effort(cls, months, crs, tf, ens.shape)
+    out = {"n_new": n, "outside_mask": int((dist[rows, cols] > 0).sum())}
+    for name, e in (("raw", None), ("target_group", effort)):
+        per = {}
+        for s in STRETCHES:
+            total, logs = loglik(ens.astype(np.int16), dist, curve, rows, cols, s, e)
+            per[s] = logs - np.log(total)
+        out[name] = score(per)
+    return out
+
+
+def new_records(slug: str, keys: list[str], months: str, ens: np.ndarray, crs, tf) -> tuple[np.ndarray, np.ndarray]:
+    """Cells of YEARS GBIF records on the model grid, more than EXCLUDE_KM from any training point."""
+    from rasterio.warp import transform
+
     lonlat = gbif_points(keys, months)
     if not len(lonlat):
-        return {"n_new": 0}
+        return np.array([], int), np.array([], int)
     x, y = transform("EPSG:4326", crs, lonlat[:, 0], lonlat[:, 1])
     rows, cols = rasterio_rowcol(tf, x, y)
     ok = (rows >= 0) & (rows < ens.shape[0]) & (cols >= 0) & (cols < ens.shape[1])
@@ -174,19 +204,7 @@ def run(slug: str, keys: list[str], curve: np.ndarray, cls: str, months: str = "
     near[tr[keep], tc[keep]] = True
     near = ndimage.binary_dilation(near, iterations=EXCLUDE_KM)
     ok = ~near[rows, cols]
-    rows, cols = rows[ok], cols[ok]
-    n = len(rows)
-    if n < 10:
-        return {"n_new": n}
-    effort = class_effort(cls, months, crs, tf, ens.shape)
-    out = {"n_new": n, "outside_mask": int((dist[rows, cols] > 0).sum())}
-    for name, e in (("raw", None), ("target_group", effort)):
-        per = {}
-        for s in STRETCHES:
-            total, logs = loglik(ens, dist, curve, rows, cols, s, e)
-            per[s] = logs - np.log(total)
-        out[name] = score(per)
-    return out
+    return rows[ok], cols[ok]
 
 
 if __name__ == "__main__":
