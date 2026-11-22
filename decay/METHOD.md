@@ -32,11 +32,11 @@ Change = total suitability in 2071-2100 / total in 1980-2010. Over all 1,968 spe
 | unclipped 2100 / unclipped current | 1,374 (70%) |
 | clipped 2100 / clipped current, same evidence | 811 (41%) |
 
-1,051 species (53%) go from gain to loss between the first and last rows. None go from loss to gain.
+The first row cannot show fewer gains than the last, because g <= 1 only lowers the future total. The fair contrast is the second row against the last, which treat both periods alike: 574 species (29%, 90% CI 27.4-30.8% from a species bootstrap, `fig_paper.py`) go from gain to loss and 11 from loss to gain.
 
 ## 4. Test decay shapes on new records (`calibrate.py`, `calibrate_batch.py`)
 
-**Test data.** GBIF records from 2025-2026, after all training data, with coordinates, no geospatial issue, uncertainty <= 5 km, and in North America. Birds use June-July only, so migrants do not count as range. Records within 2 km of any training point are dropped, so the test set is not the fit set. Species with fewer than 10 records are not scored.
+**Test data.** GBIF records from 2025-2026, after all training data, with coordinates, no geospatial issue, uncertainty <= 5 km, and in North America. Birds use June-July only, so migrants do not count as range. Records within 2 km of any training point are dropped, so the test set is not the fit set. Species with fewer than 10 records, or fewer than 3 outside the evidence mask, are not scored: records inside the mask have g = 1 under every candidate, so with none outside the tightest decay wins by construction.
 
 **Score.** Each candidate g defines an intensity `lambda(x) = max(ensemble(x) g(d(x)), 0.5) x effort(x)`. The score is the mean log-likelihood of the new records under the normalised intensity, `mean_i log(lambda(x_i) / sum_x lambda(x))` (a presence-only Poisson point process). Higher is better. The floor 0.5 keeps a hard clip finite outside the mask.
 
@@ -48,7 +48,7 @@ Change = total suitability in 2071-2100 / total in 1980-2010. Over all 1,968 spe
 - `exp`: exp(-d / tau), tau in {1, 2, 5, 10, 20, 40, 80, 160, 320, 640, 1280, 2560} km. This is the paper's shape, measured to the evidence mask, not to the IUCN range.
 - `halfnormal`: exp(-d^2 / (2 sigma^2)), sigma on the same grid.
 
-For `exp` and `halfnormal`, the best grid value is then refined by maximum likelihood (bounded 1-D search in log scale, from 0.25 km), stored as `fit`.
+For `exp` and `halfnormal`, the best grid value is then refined by maximum likelihood (bounded 1-D search in log scale, lower bound 0.4 km), stored as `fit`.
 
 **Uncertainty.** New records cluster along roads, trails and towns, so records are not independent. The bootstrap resamples 25 km blocks of records (the effort grid cells), not single records, 200 times. This gives a 90% interval for the best grid parameter in each family and how often each family wins.
 
