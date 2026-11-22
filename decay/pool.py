@@ -73,8 +73,11 @@ def main(log: Path) -> dict:
         gains += np.array(ch) > 1
     for c in classes.values():
         del c["mu"], c["sd"]
+    weighted = {f: sum(r["n_new"] * r[f].get("ll_fit", r[f]["ll"]) for r in scored) for f in totals}
+    weighted["published"] = sum(r["n_new"] * r["ll_published"] for r in scored)
     beats = sum(max(r["exp"]["ll"], r["halfnormal"]["ll"]) > r["ll_published"] for r in scored)
     summary = {"family": fam, "ll_total": {k: round(v, 1) for k, v in totals.items()},
+               "ll_records": {k: round(v, 1) for k, v in weighted.items()},
                "ll_total_published": round(sum(r["ll_published"] for r in scored), 1),
                "n_rows": len(rows), "n_scored": len(scored), "parametric_beats_published": beats,
                "species_gaining": {"pooled": int(gains[1]), "tight_end": int(gains[0]), "wide_end": int(gains[2]),
