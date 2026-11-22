@@ -36,7 +36,7 @@ ax[0].set_title("a", loc="left", fontweight="bold")
 classes = ["Amphibians", "Reptiles", "Mammals", "Birds"]
 own = {c: [] for c in classes}
 for r in cal.values():
-    if "winner" in r and r["class"] in own:
+    if "winner" in r and r["outside_mask"] >= 3 and r["class"] in own:
         own[r["class"]].append(r["halfnormal"]["fit"])
 ax[1].boxplot([np.log10(own[c]) for c in classes], showfliers=False)
 for i, c in enumerate(classes, 1):
